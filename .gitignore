@@ -1,0 +1,35 @@
+# Laravel specific
+/vendor/
+/node_modules/
+.env
+.env.backup
+.env.production
+.env.local
+.phpunit.result.cache
+Homestead.json
+Homestead.yaml
+auth.json
+storage/*.key
+storage/*.lock
+storage/*.json
+
+# Compiled files
+*.pyc
+*.class
+*.log
+.DS_Store
+.idea/
+.vscode/
+composer.lock
+package-lock.json
+
+# Cache
+/bootstrap/cache/
+/storage/framework/cache/
+/storage/framework/sessions/
+/storage/framework/views/
+
+# IDE
+/.idea/
+/.vscode/
+*.iml
