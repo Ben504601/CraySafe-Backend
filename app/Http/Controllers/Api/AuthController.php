@@ -130,74 +130,123 @@ class AuthController extends Controller
 
     public function pairTank(Request $request)
     {
-        // Validate input
-        $request->validate([
-            'product_id' => 'required|string|exits:purchases,purchase_id'
-        ]);
+        try {
+            \Log::info('PairTank started', ['product_id' => $request->product_id]);
 
-        $productId = $request->product_id;
+            // Validate input
+            $request->validate([
+                'product_id' => 'required|string|exists:purchases,purchase_id'
+            ]);
 
-        // Check if ProductID exists and its not activated
-        $purchase = DB::table('purchases')
-            ->where('purchase_id', $productId)
-            ->first();
-        
-        if (!$purchase) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Invalid Product ID'
-            ], 404);
-        }
+            $productId = $request->product_id;
+            \Log::info('Validated product_id', ['product_id' => $productId]);
 
-        if ($purchase->is_activated == 1) {
-            return response()->json([
-                'success' => false,
-                'message' => 'This Product ID has already been paired'
-            ], 409);
-        }
+            // Check if ProductID exists and is not activated
+            $purchase = DB::table('purchases')
+                ->where('purchase_id', $productId)
+                ->first();
 
-        // Get the authenticated user (from token)
-        $token = $request->bearerToken();
-        $parts = explode('|', base64_decode($token));
-        $userId = $parts[0] ?? null;
+            \Log::info('Purchase found', ['purchase' => $purchase]);
 
-        if (!$userId) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Unauthorized'
-            ], 401);
-        }
+            if (!$purchase) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Invalid Product ID'
+                ], 404);
+            }
 
-        // Create a new tank
-        $tankId = DB::table('tanks')->insertGetId([
-            'ProductId' => $productId,
-            'Tankname' => 'Tank' . $productId // Default name
-        ]);
+            if ($purchase->is_activated == 1) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'This Product ID has already been paired'
+                ], 409);
+            }
 
-        // Link to user in dashboard
-        DB::table('dashboard')->insert([
-            'UserID' => $userId,
-            'TankID' => $tankId,
-            'Mode' => 'Growing',
-            'Temperature' => 25.0,
-            'Ph_Level' => 7.0,
-            'Turbidity' => 0,
-            'Status' => 'Safe'
-        ]);
+            // Get the authenticated user (from token)
+            $token = $request->bearerToken();
+            \Log::info('Token received', ['token' => $token]);
 
-        // Mark ProductID as activated
-        DB::table('purchases')
-            ->where('purchase_id', $productId)
-            ->update(['is_activated' => 1]);
+            if (!$token) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Token missing'
+                ], 401);
+            }
 
-        return response()->json([
-            'success' => true,
-            'message' => 'Tank paired successfully!',
-            'tank' => [
-                'TankID' => $tankId,
+            $parts = explode('|', base64_decode($token));
+            $userId = $parts[0] ?? null;
+            \Log::info('User ID extracted', ['user_id' => $userId]);
+
+            if (!$userId) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Unauthorized'
+                ], 401);
+            }
+
+            // Check if this ProductID is already linked to a tank
+            $existingTank = DB::table('tanks')
+                ->where('ProductID', $productId)
+                ->first();
+
+            if ($existingTank) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'This Product ID is already linked to a tank'
+                ], 409);
+            }
+
+            // Create a new tank
+            \Log::info('Creating tank', ['product_id' => $productId]);
+
+            $tankId = DB::table('tanks')->insertGetId([
                 'ProductID' => $productId,
-                'Tankname' => 'Tank' . $productId
-            ]
-        ], 201);
+                'Tankname' => 'Tank ' . $productId
+            ]);
+
+            \Log::info('Tank created', ['tank_id' => $tankId]);
+
+            // Link to user in dashboard
+            DB::table('dashboard')->insert([
+                'UserID' => $userId,
+                'TankID' => $tankId,
+                'Mode' => 'Growing',
+                'Temperature' => 25.0,
+                'Ph_Level' => 7.0,
+                'Turbidity' => 0,
+                'Status' => 'Safe'
+            ]);
+
+            \Log::info('Dashboard entry created');
+
+            // Mark ProductID as activated
+            DB::table('purchases')
+                ->where('purchase_id', $productId)
+                ->update(['is_activated' => 1]);
+
+            \Log::info('Purchase activated');
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Tank paired successfully!',
+                'tank' => [
+                    'TankID' => $tankId,
+                    'ProductID' => $productId,
+                    'Tankname' => 'Tank ' . $productId
+                ]
+            ], 201);
+
+        } catch (\Exception $e) {
+            \Log::error('PairTank error', [
+                'message' => $e->getMessage(),
+                'file' => $e->getFile(),
+                'line' => $e->getLine()
+            ]);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Server error: ' . $e->getMessage()
+            ], 500);
+        }
     }
 }
