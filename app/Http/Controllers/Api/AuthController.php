@@ -127,4 +127,77 @@ class AuthController extends Controller
             'message' => 'Dashboard loaded'
         ]);
     }
+
+    public function pairTank(Request $request)
+    {
+        // Validate input
+        $request->validate([
+            'product_id' => 'required|string|exits:purchases,purchase_id'
+        ]);
+
+        $productId = $request->product_id;
+
+        // Check if ProductID exists and its not activated
+        $purchase = DB::table('purchases')
+            ->where('purchase_id', $productId)
+            ->first();
+        
+        if (!$purchase) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Invalid Product ID'
+            ], 404);
+        }
+
+        if ($purchase->is_activated == 1) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This Product ID has already been paired'
+            ], 409);
+        }
+
+        // Get the authenticated user (from token)
+        $token = $request->bearerToken();
+        $parts = explode('|', base64_decode($token));
+        $userId = $parts[0] ?? null;
+
+        if (!$userId) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Unauthorized'
+            ], 401);
+        }
+
+        // Create a new tank
+        $tankId = DB::table('tanks')->insertGetId([
+            'ProductId' => $productId,
+            'Tankname' => 'Tank' . $productId // Default name
+        ]);
+
+        // Link to user in dashboard
+        DB::table('dashboard')->insert([
+            'UserID' => $userId,
+            'TankID' => $tankId,
+            'Mode' => 'Growing',
+            'Temperature' => 25.0,
+            'Ph_Level' => 7.0,
+            'Turbidity' => 0,
+            'Status' => 'Safe'
+        ]);
+
+        // Mark ProductID as activated
+        DB::table('purchases')
+            ->where('purchase_id', $productId)
+            ->update(['is_activated' => 1]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Tank paired successfully!',
+            'tank' => [
+                'TankID' => $tankId,
+                'ProductID' => $productId,
+                'Tankname' => 'Tank' . $productId
+            ]
+        ], 201);
+    }
 }

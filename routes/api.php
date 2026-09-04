@@ -21,6 +21,8 @@ Route::get('/test', function () {
     ]);
 });
 
+Route::post('/pair-tank', [AuthController::class, 'pairTank']);
+
 Route::get('/ping', function () {
     return response()->json(['message' => 'pong']);
 });
