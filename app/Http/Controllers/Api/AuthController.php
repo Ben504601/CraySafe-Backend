@@ -51,8 +51,43 @@ class AuthController extends Controller
         $request->validate([
             'username' => 'required|string|max:50|unique:users,username',
             'email' => 'required|email|max:100|unique:users,email',
-            'password' => 'required|min:6|confirmed'
+            'password' => 'required|min:6',
+            'confirm_password' => 'required|same:password',
+            'product_id' => 'required|string|exists:purchases,purchase_id'
         ]);
+
+        $productId = $request->product_id;
+
+        // Check if ProductID is already activated
+        $purchase = DB::table('purchases')
+            ->where('purchase_id', $productId)
+            ->first();
+        
+        if (!$purchase) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Invalid Product ID'
+            ], 404);
+        }
+
+        if ($purchase->is_activated == 1) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This Product ID has aleardy been used to register an account'
+            ], 409);
+        }
+
+        // Check if ProductID is already linked to a tank (redundance check)
+        $existingTank = DB::table('tanks')
+            ->where('ProductID', $productId)
+            ->first();
+
+        if ($existingTank) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This Product ID is already linked to a tank'
+            ], 409);
+        }
 
         // Insert new user
         $userId = DB::table('users')->insertGetId([
@@ -66,12 +101,33 @@ class AuthController extends Controller
         // Get the newly created user
         $user = DB::table('users')->where('user_id', $userId)->first();
 
+        // Create a tank automatically
+        $tankId = DB::table('tanks')->insertGetId([
+            'ProductID' => $productId,
+            'Tankname' => 'Tank' . $productId
+        ]);
+
+        // Link tank to user in dashboard
+        DB::table('dashboard')->insert([
+            'UserID' => $userId,
+            'TankID' => $tankId,
+            'Mode' => 'Growing',
+            'Temperature' => 25.0,
+            'Ph_Level' => 7.0,
+            'Turbidity' => 0,
+            'Status' => 'Safe'
+        ]);
+
+        DB::table('purchases')
+            ->where('purchase_id', $productId)
+            ->update(['is_activated' => 1]);
+
         // Create token
         $token = base64_encode($user->user_id . '|' . $user->email . '|' . now());
 
         return response()->json([
             'success' => true,
-            'message' => 'Registration successful!',
+            'message' => 'Registration successful! Your tank has been set up.',
             'token' => $token,
             'user' => [
                 'id' => $user->user_id,
