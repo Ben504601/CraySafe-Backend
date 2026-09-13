@@ -184,6 +184,81 @@ class AuthController extends Controller
         ]);
     }
 
+    public function tankDetail(Request $request, $tankId)
+    {
+        try {
+            // Validate Token
+            $token = $request->bearerToken();
+            if (!$token) {
+                return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
+            }
+
+            $parts = explode('|', base64_decode($token));
+            $userId = $parts[0] ?? null;
+
+            if (!$userId) {
+                return response()->json(['success' => false, 'message' => 'Invalid token'], 401);
+            }
+
+            // Get tank info + dashboard data
+            $tank = DB::table('tanks')
+                ->join('dashboard', 'tanks.TankID', '=', 'dashboard.TankID')
+                ->where('tanks.TankID', $tankId)
+                ->where('dashboard.UserID', $userId)
+                ->select(
+                    'tanks.TankID',
+                    'tanks.Tankname',
+                    'dashboard.Mode',
+                    'dashboard.Temperature',
+                    'dashboard.Ph_Level',
+                    'dashboard.Turbidity',
+                    'dashboard.Status'
+                )
+                ->first();
+
+            if (!$tank) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Tank not found'
+                ], 404);
+            }
+
+            // Get the latest prediction
+            $prediction = DB::table('predictions')
+                ->where('tank_id', $tankId)
+                ->orderby('created_at', 'desc')
+                ->first();
+
+            // Get the latest sensor reading timestamp
+            $latestReading = DB::table('sensor_data')
+                ->where('tank_id', $tankId)
+                ->orderby('timestamp', 'desc')
+                ->first();
+
+            // Combine into one response
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'TankID' => $tank->TankID,
+                    'Tankname' => $tank->Tankname,
+                    'Mode' => $tank->Mode,
+                    'Temperature' => $tank->Temperature,
+                    'Ph_Level' => $tank->Ph_Level,
+                    'Turbidity' => $tank->Turbidity,
+                    'Status' => $tank->Status,
+                    'TimeToDanger' => $prediction ? $prediction->minutes_to_danger . 'minutes' : null,
+                    'LastUpdated' => $latestReading ? $latestReading->timestamp : null,
+                ]
+            ]);
+        } catch (\Exception $e) {
+            \Log::info('TankDetail error', ['message' => $e->getMessage()]);
+            return response()->json([
+                'success' => false,
+                'message' => 'Server error'
+            ], 500);
+        }
+    }
+
     public function pairTank(Request $request)
     {
         try {

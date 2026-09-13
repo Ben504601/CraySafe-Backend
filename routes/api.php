@@ -12,6 +12,9 @@ Route::post('/register', [AuthController::class, 'register']);
 // DASHBOARD ROUTE
 Route::get('/dashboard', [AuthController::class, 'dashboard']);
 
+// TANK DETAILS ROUTE
+Route::get('/tank/{id}', [AuthController::class, 'tankDetail']);
+
 // TEST ROUTE
 Route::get('/test', function () {
     return response()->json([
