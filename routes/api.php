@@ -15,6 +15,9 @@ Route::get('/dashboard', [AuthController::class, 'dashboard']);
 // TANK DETAILS ROUTE
 Route::get('/tank/{id}', [AuthController::class, 'tankDetail']);
 
+// PREDICTION ROUTE
+Route::get('/tank/{id}/time-to-danger', [AuthController::class, 'timeToDanger']);
+
 // TEST ROUTE
 Route::get('/test', function () {
     return response()->json([

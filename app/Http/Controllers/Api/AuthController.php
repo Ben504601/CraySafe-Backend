@@ -381,4 +381,185 @@ class AuthController extends Controller
             ], 500);
         }
     }
+
+    public function timeToDanger(Request $request, $tankId)
+    {
+        try {
+            // Verify token
+            $token = $request->bearerToken();
+            if (!$token) {
+                return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
+            }
+
+            // Fetch the last 21 readings for this tank
+            $readings = DB::table('sensor_data')
+                ->where('tank_id', $tankId)
+                ->orderBy('timestamp', 'desc')
+                ->limit(21)
+                ->get()
+                ->reverse()
+                ->values();
+
+            if ($readings->count() < 21) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Not enough data. Need at least 21 readings.'
+                ], 400);
+            }
+
+            // Get current tank mode
+            $tank = DB::table('dashboard')
+                ->where('TankID', $tankId)
+                ->first();
+
+            $mode = $tank->Mode ?? 'Growing';
+
+            // Define thresholds for each parameter based on mode
+            $thresholds = $mode === 'Breeding'
+                ? ['temperature' => [18, 26], 'ph' => [6.8, 8.7], 'turbidity' => [0, 70]]
+                : ['temperature' => [20, 28], 'ph' => [6.5, 8.5], 'turbidity' => [0, 100]];
+
+            // Compute Time-to-Danger for each parameter
+            $result = [
+                'temperature' => $this->computeTimeToDanger(
+                    $readings->pluck('temperature')->toArray(),
+                    $readings->pluck('timestamp')->toArray(),
+                    $thresholds['temperature']
+                ),
+                'ph' => $this->computeTimeToDanger(
+                    $readings->pluck('ph_level')->toArray(),
+                    $readings->pluck('timestamp')->toArray(),
+                    $thresholds['ph']
+                ),
+                'turbidity' => $this->computeTimeToDanger(
+                    $readings->pluck('turbidity')->toArray(),
+                    $readings->pluck('timestamp')->toArray(),
+                    $thresholds['turbidity']
+                ),
+            ];
+
+            return response()->json([
+                'success' => true,
+                'data' => $result,
+                'message' => 'Time-to-Danger computed'
+            ]);
+        } catch (\Exception $e) {
+            Log::error('TimeToDanger error', ['message' => $e->getMessage()]);
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+        }
+    }
+
+    // Compute time in minutes until the value crosses a threshold, will return null if not danger is predicted
+    private function computeTimeToDanger(array $values, array $timestamps, array $range)
+    {
+        // Fit the multiple linear regression model
+        $coefficients = $this->fitMLR($values, $timestamps);
+        if ($coefficients === null) return null;
+
+        [$b, $m1, $m2, $m3] = $coefficients;
+
+        // Get the reference time (first reading)
+        $firstTimestamp = strtotime($timestamps[0]);
+        $now = time();
+        $minutesSinceStart = ($now - $firstTimestamp) / 60;
+
+        // Iterate forward up to 30 days
+        $maxMinutes = 30 * 24 * 60;
+        for ($futureMinutes = 8; $futureMinutes <= $maxMinutes; $futureMinutes += 8) {
+            $totalMinutes = $minutesSinceStart + $futureMinutes;
+            $futureTimestamp = $now + ($futureMinutes * 60);
+            $futureHour = (int)date('G', $futureTimestamp);
+
+            $predicted = $b 
+                + $m1 * $totalMinutes
+                + $m2 * sin(2 * M_PI * $futureHour / 24)
+                + $m3 * cos(2 * M_PI * $futureHour / 24);
+            
+            if ($predicted >= $range[1] || $predicted <= $range[0]) {
+                return [
+                    'minutes' => $futureMinutes,
+                    'predicted_value' => round($predicted, 2),
+                    'breach_type' => $predicted >= $range[1] ? 'high' : 'low',
+                ];
+            }
+        }
+        return null;
+    }
+
+    // Fit y = b + m1*t + m2*sin(2πh/24) + m3*cos(2πh/24), using ordinary least squares
+    private function fitMLR(array $values, array $timestamps)
+    {
+        $n = count($values);
+        if ($n < 4) return null;
+
+        $startTime = strtotime($timestamps[0]);
+
+        // Build the design matrix X (n x 4) and target vector y (n x 1)
+        $X = [];
+        $y = [];
+        for ($i = 0; $i < $n; $i++) {
+            $t = (strtotime($timestamps[$i]) - $startTime) / 60; // minutes
+            $h = (int)date('G', strtotime($timestamps[$i]));
+            $X[] = [1, $t, sin(2 * M_PI * $h / 24), cos(2 * M_PI * $h / 24)];
+            $y[] = $values[$i];
+        }
+
+        // Compute X^T . X (4x4 matrix) and X^T / y (4x1 vector)
+        $XtX = array_fill(0, 4, array_fill(0, 4, 0.0));
+        $Xty = array_fill(0, 4, 0.0);
+
+        for ($i = 0; $i < $n; $i++) {
+            for ($j = 0; $j < 4; $j++) {
+                for ($k = 0; $k < 4; $k++) {
+                    $XtX[$j][$k] += $X[$i][$j] * $X[$i][$k];
+                }
+                $Xty[$j] += $X[$i][$j] * $y[$i];
+            }
+        }
+        // Solve the 4x4 system using Gaussian elimination
+        return $this->solveLinearSystem($XtX, $Xty);
+    }
+
+    // Solve Ax = b for x using Gaussian elimination with partial pivoting
+    private function solveLinearSystem(array $A, array $b)
+    {
+        $n = count($b);
+
+        // Augmented matrix [A | b]
+        for ($i = 0; $i < $n; $i++) {
+            $A[$i][] = $b[$i];
+        }
+
+        //Forward elimination
+        for ($i = 0; $i < $n; $i++) {
+            // Find pivot
+            $maxRow = $i;
+            for ($k = $i + 1; $k < $n; $k++) {
+                if (abs($A[$k][$i]) > abs($A[$maxRow][$i])) $maxRow = $k;
+            }
+            if (abs($A[$maxRow][$i]) < 1e-10) return null; //singular
+
+            // Swap rows
+            [$A[$i], $A[$maxRow]] = [$A[$maxRow], $A[$i]];
+
+            // Eliminate
+            for ($k = $i + 1; $k < $n; $k++) {
+                $factor = $A[$k][$i] / $A[$i][$i];
+                for ($j = $i; $j <= $n; $j++) {
+                    $A[$k][$j] -= $factor * $A[$i][$j];
+                }
+            }
+        }
+
+        // Back substitution
+        $x = array_fill(0, $n, 0.0);
+        for ($i = $n - 1; $i >= 0; $i++) {
+            $sum = $A[$i][$n];
+            for ($j = $i + 1; $j < $n; $j++) {
+                $sum -= $A[$i][$j] * $x[$j];
+            }
+            $x[$i] = $sum / $A[$i][$i];
+        }
+        return $x;
+    }
 }
