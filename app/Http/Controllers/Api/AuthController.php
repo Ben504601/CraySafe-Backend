@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\DB;
 
 class AuthController extends Controller
@@ -251,7 +252,7 @@ class AuthController extends Controller
                 ]
             ]);
         } catch (\Exception $e) {
-            \Log::info('TankDetail error', ['message' => $e->getMessage()]);
+            Log::info('TankDetail error', ['message' => $e->getMessage()]);
             return response()->json([
                 'success' => false,
                 'message' => 'Server error'
@@ -262,7 +263,7 @@ class AuthController extends Controller
     public function pairTank(Request $request)
     {
         try {
-            \Log::info('PairTank started', ['product_id' => $request->product_id]);
+            Log::info('PairTank started', ['product_id' => $request->product_id]);
 
             // Validate input
             $request->validate([
@@ -270,14 +271,14 @@ class AuthController extends Controller
             ]);
 
             $productId = $request->product_id;
-            \Log::info('Validated product_id', ['product_id' => $productId]);
+            Log::info('Validated product_id', ['product_id' => $productId]);
 
             // Check if ProductID exists and is not activated
             $purchase = DB::table('purchases')
                 ->where('purchase_id', $productId)
                 ->first();
 
-            \Log::info('Purchase found', ['purchase' => $purchase]);
+            Log::info('Purchase found', ['purchase' => $purchase]);
 
             if (!$purchase) {
                 return response()->json([
@@ -295,7 +296,7 @@ class AuthController extends Controller
 
             // Get the authenticated user (from token)
             $token = $request->bearerToken();
-            \Log::info('Token received', ['token' => $token]);
+            Log::info('Token received', ['token' => $token]);
 
             if (!$token) {
                 return response()->json([
@@ -306,7 +307,7 @@ class AuthController extends Controller
 
             $parts = explode('|', base64_decode($token));
             $userId = $parts[0] ?? null;
-            \Log::info('User ID extracted', ['user_id' => $userId]);
+            Log::info('User ID extracted', ['user_id' => $userId]);
 
             if (!$userId) {
                 return response()->json([
@@ -328,14 +329,14 @@ class AuthController extends Controller
             }
 
             // Create a new tank
-            \Log::info('Creating tank', ['product_id' => $productId]);
+            Log::info('Creating tank', ['product_id' => $productId]);
 
             $tankId = DB::table('tanks')->insertGetId([
                 'ProductID' => $productId,
                 'Tankname' => 'Tank ' . $productId
             ]);
 
-            \Log::info('Tank created', ['tank_id' => $tankId]);
+            Log::info('Tank created', ['tank_id' => $tankId]);
 
             // Link to user in dashboard
             DB::table('dashboard')->insert([
@@ -348,14 +349,14 @@ class AuthController extends Controller
                 'Status' => 'Safe'
             ]);
 
-            \Log::info('Dashboard entry created');
+            Log::info('Dashboard entry created');
 
             // Mark ProductID as activated
             DB::table('purchases')
                 ->where('purchase_id', $productId)
                 ->update(['is_activated' => 1]);
 
-            \Log::info('Purchase activated');
+            Log::info('Purchase activated');
 
             return response()->json([
                 'success' => true,
@@ -368,7 +369,7 @@ class AuthController extends Controller
             ], 201);
 
         } catch (\Exception $e) {
-            \Log::error('PairTank error', [
+            Log::error('PairTank error', [
                 'message' => $e->getMessage(),
                 'file' => $e->getFile(),
                 'line' => $e->getLine()
