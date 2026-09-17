@@ -385,13 +385,13 @@ class AuthController extends Controller
     public function timeToDanger(Request $request, $tankId)
     {
         try {
-            // Verify token
+            // 1. Verify token (same pattern)
             $token = $request->bearerToken();
             if (!$token) {
                 return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
             }
 
-            // Fetch the last 21 readings for this tank
+            // 2. Fetch the last 21 sensor readings for this tank
             $readings = DB::table('sensor_data')
                 ->where('tank_id', $tankId)
                 ->orderBy('timestamp', 'desc')
@@ -407,19 +407,19 @@ class AuthController extends Controller
                 ], 400);
             }
 
-            // Get current tank mode
+            // 3. Get tank's current mode
             $tank = DB::table('dashboard')
                 ->where('TankID', $tankId)
                 ->first();
 
             $mode = $tank->Mode ?? 'Growing';
 
-            // Define thresholds for each parameter based on mode
-            $thresholds = $mode === 'Breeding'
+            // 4. Define thresholds for each parameter based on mode
+            $thresholds = $mode === 'Breeding' 
                 ? ['temperature' => [18, 26], 'ph' => [6.8, 8.7], 'turbidity' => [0, 70]]
                 : ['temperature' => [20, 28], 'ph' => [6.5, 8.5], 'turbidity' => [0, 100]];
 
-            // Compute Time-to-Danger for each parameter
+            // 5. Compute Time-to-Danger for each parameter
             $result = [
                 'temperature' => $this->computeTimeToDanger(
                     $readings->pluck('temperature')->toArray(),
@@ -443,38 +443,42 @@ class AuthController extends Controller
                 'data' => $result,
                 'message' => 'Time-to-Danger computed'
             ]);
+
         } catch (\Exception $e) {
             Log::error('TimeToDanger error', ['message' => $e->getMessage()]);
             return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
         }
     }
 
-    // Compute time in minutes until the value crosses a threshold, will return null if not danger is predicted
+    /**
+     * Compute time (in minutes) until the value crosses a threshold.
+     * Returns null if no danger is predicted.
+     */
     private function computeTimeToDanger(array $values, array $timestamps, array $range)
     {
-        // Fit the multiple linear regression model
+        // 1. Fit the multiple linear regression model
         $coefficients = $this->fitMLR($values, $timestamps);
         if ($coefficients === null) return null;
 
         [$b, $m1, $m2, $m3] = $coefficients;
 
-        // Get the reference time (first reading)
+        // 2. Get the reference time (first reading)
         $firstTimestamp = strtotime($timestamps[0]);
         $now = time();
         $minutesSinceStart = ($now - $firstTimestamp) / 60;
 
-        // Iterate forward up to 30 days
+        // 3. Iterate forward up to 30 days
         $maxMinutes = 30 * 24 * 60;
         for ($futureMinutes = 8; $futureMinutes <= $maxMinutes; $futureMinutes += 8) {
             $totalMinutes = $minutesSinceStart + $futureMinutes;
             $futureTimestamp = $now + ($futureMinutes * 60);
-            $futureHour = (int)date('G', $futureTimestamp);
+            $futureHour = (int)date('G', $futureTimestamp);  // 0-23
 
-            $predicted = $b 
+            $predicted = $b
                 + $m1 * $totalMinutes
                 + $m2 * sin(2 * M_PI * $futureHour / 24)
                 + $m3 * cos(2 * M_PI * $futureHour / 24);
-            
+
             if ($predicted >= $range[1] || $predicted <= $range[0]) {
                 return [
                     'minutes' => $futureMinutes,
@@ -483,10 +487,14 @@ class AuthController extends Controller
                 ];
             }
         }
+
         return null;
     }
 
-    // Fit y = b + m1*t + m2*sin(2πh/24) + m3*cos(2πh/24), using ordinary least squares
+    /**
+     * Fit y = b + m1*t + m2*sin(2πh/24) + m3*cos(2πh/24)
+     * using ordinary least squares.
+     */
     private function fitMLR(array $values, array $timestamps)
     {
         $n = count($values);
@@ -494,17 +502,17 @@ class AuthController extends Controller
 
         $startTime = strtotime($timestamps[0]);
 
-        // Build the design matrix X (n x 4) and target vector y (n x 1)
+        // Build the design matrix X (n × 4) and target vector y (n × 1)
         $X = [];
         $y = [];
         for ($i = 0; $i < $n; $i++) {
-            $t = (strtotime($timestamps[$i]) - $startTime) / 60; // minutes
+            $t = (strtotime($timestamps[$i]) - $startTime) / 60;  // minutes
             $h = (int)date('G', strtotime($timestamps[$i]));
             $X[] = [1, $t, sin(2 * M_PI * $h / 24), cos(2 * M_PI * $h / 24)];
             $y[] = $values[$i];
         }
 
-        // Compute X^T . X (4x4 matrix) and X^T / y (4x1 vector)
+        // Compute X^T · X (4×4 matrix) and X^T · y (4×1 vector)
         $XtX = array_fill(0, 4, array_fill(0, 4, 0.0));
         $Xty = array_fill(0, 4, 0.0);
 
@@ -516,11 +524,14 @@ class AuthController extends Controller
                 $Xty[$j] += $X[$i][$j] * $y[$i];
             }
         }
-        // Solve the 4x4 system using Gaussian elimination
+
+        // Solve the 4×4 system using Gaussian elimination
         return $this->solveLinearSystem($XtX, $Xty);
     }
 
-    // Solve Ax = b for x using Gaussian elimination with partial pivoting
+    /**
+     * Solve Ax = b for x using Gaussian elimination with partial pivoting.
+     */
     private function solveLinearSystem(array $A, array $b)
     {
         $n = count($b);
@@ -530,14 +541,14 @@ class AuthController extends Controller
             $A[$i][] = $b[$i];
         }
 
-        //Forward elimination
+        // Forward elimination
         for ($i = 0; $i < $n; $i++) {
             // Find pivot
             $maxRow = $i;
             for ($k = $i + 1; $k < $n; $k++) {
                 if (abs($A[$k][$i]) > abs($A[$maxRow][$i])) $maxRow = $k;
             }
-            if (abs($A[$maxRow][$i]) < 1e-10) return null; //singular
+            if (abs($A[$maxRow][$i]) < 1e-10) return null;  // singular
 
             // Swap rows
             [$A[$i], $A[$maxRow]] = [$A[$maxRow], $A[$i]];
@@ -553,13 +564,14 @@ class AuthController extends Controller
 
         // Back substitution
         $x = array_fill(0, $n, 0.0);
-        for ($i = $n - 1; $i >= 0; $i++) {
+        for ($i = $n - 1; $i >= 0; $i--) {
             $sum = $A[$i][$n];
             for ($j = $i + 1; $j < $n; $j++) {
                 $sum -= $A[$i][$j] * $x[$j];
             }
             $x[$i] = $sum / $A[$i][$i];
         }
+
         return $x;
     }
 }
