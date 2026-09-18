@@ -142,66 +142,93 @@ class AuthController extends Controller
     public function dashboard(Request $request)
     {
         $token = $request->bearerToken();
-
         if (!$token) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Unauthorized'
-            ], 401);
+            return response()->json(['success' => false, 'message' => 'Unathorized'], 401);
         }
 
-        // Decode token to get user_id
         $parts = explode('|', base64_decode($token));
         $userId = $parts[0] ?? null;
-
         if (!$userId) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Invalid token'
-            ], 401);
+            return response()->json(['success' => false, 'message' => 'Invalid Token'], 401);
         }
 
-        // Get tanks for this user
+        // Get all tanks for this user
         $tanks = DB::table('tanks')
             ->join('dashboard', 'tanks.TankID', '=', 'dashboard.TankID')
             ->where('dashboard.UserID', $userId)
             ->select(
-                'dashboard.DashboardID',
-                'dashboard.UserID',
-                'dashboard.TankID',
-                'dashboard.Mode',
-                'dashboard.Temperature',
-                'dashboard.Ph_Level',
-                'dashboard.Turbidity',
-                'dashboard.Status',
-                'tanks.Tankname'
+                'tanks.TankID',
+                'tanks.Tankname',
+                'dashboard.Mode'
             )
             ->get();
 
+        // For each tank, fetch the latest sensor reading
+        $result = $tanks->map(function ($tank) {
+            $latest = DB::table('sensor_data')
+                ->where('tank_id', $tank->TankID)
+                ->orderBy('timestamp', 'desc')
+                ->first();
+
+            return [
+                'DashboardID' => $tank->TankID, // Used as ID
+                'UserID' => null,
+                'TankID' => $tank->TankID,
+                'Tankname' => $tank->Tankname,
+                'Mode' => $tank->Mode ?? 'Growing',
+                'Temperature' => $latest->temperature ?? null,
+                'Ph_Level' => $latest->ph_level ?? null,
+                'Turbidity' => $latest->turbidity ?? null,
+                'Status' => $latest ? $this->computeStatus($latest, $tank->Mode) : 'Unknown',
+            ];
+        });
+
         return response()->json([
             'success' => true,
-            'data' => $tanks,
+            'data' => $result,
             'message' => 'Dashboard loaded'
         ]);
+    }
+
+    // Compute status based on the mode's thresholds.
+    private function computeStatus($reading, $mode)
+    {
+        $tempSafe = $mode === "Breeding" ? [18, 26] : [20, 28];
+        $phSafe = $mode === "Breeding" ? [6.8, 8.7] : [6.5, 8.5];
+        $turbSafe = $mode === "Breeding" ? [0, 70] : [0, 100];
+
+        $temp = $reading->temperature;
+        $ph = $reading->ph_level;
+        $turb = $reading->turbidity;
+
+        // Critical if outside any critical range
+        if ($temp < $tempSafe[0] || $temp > $tempSafe[1] ||
+            $ph < $phSafe[0] || $ph > $phSafe[1] ||
+            $turb > $turbSafe[1]) {
+                return 'Critical';
+            }
+        
+        // Warning if within 10% of threshold
+        if ($temp < $tempSafe[0] + 1 || $temp > $tempSafe[1] - 1 ||
+            $ph < $phSafe[0] + 0.3 || $ph > $phSafe[1] - 0.3 ||
+            $turb > $turbSafe[1] * 0.7) {
+                return 'Warning';
+            }
+
+            return 'Safe';
     }
 
     public function tankDetail(Request $request, $tankId)
     {
         try {
-            // Validate Token
             $token = $request->bearerToken();
             if (!$token) {
-                return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
+                return response()->json(['success' => false, 'message' => 'Unathorized'], 401);
             }
-
             $parts = explode('|', base64_decode($token));
             $userId = $parts[0] ?? null;
 
-            if (!$userId) {
-                return response()->json(['success' => false, 'message' => 'Invalid token'], 401);
-            }
-
-            // Get tank info + dashboard data
+            // Tank info + mode (from dashboard)
             $tank = DB::table('tanks')
                 ->join('dashboard', 'tanks.TankID', '=', 'dashboard.TankID')
                 ->where('tanks.TankID', $tankId)
@@ -209,54 +236,43 @@ class AuthController extends Controller
                 ->select(
                     'tanks.TankID',
                     'tanks.Tankname',
-                    'dashboard.Mode',
-                    'dashboard.Temperature',
-                    'dashboard.Ph_Level',
-                    'dashboard.Turbidity',
-                    'dashboard.Status'
+                    'dashboard.Mode'
                 )
                 ->first();
 
             if (!$tank) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Tank not found'
-                ], 404);
+                return response()->json(['success' => false, 'message' => 'Tank not found'], 404);
             }
 
-            // Get the latest prediction
+            // Latest reading from sensor_data
+            $latest = DB::table('sensor_data')
+                ->where('tank_id', $tankId)
+                ->orderBy('timestamp', 'desc')
+                ->first();
+
+            // Latest prediction
             $prediction = DB::table('predictions')
                 ->where('tank_id', $tankId)
-                ->orderby('created_at', 'desc')
+                ->orderBy('created_at', 'desc')
                 ->first();
 
-            // Get the latest sensor reading timestamp
-            $latestReading = DB::table('sensor_data')
-                ->where('tank_id', $tankId)
-                ->orderby('timestamp', 'desc')
-                ->first();
-
-            // Combine into one response
             return response()->json([
                 'success' => true,
                 'data' => [
                     'TankID' => $tank->TankID,
                     'Tankname' => $tank->Tankname,
-                    'Mode' => $tank->Mode,
-                    'Temperature' => $tank->Temperature,
-                    'Ph_Level' => $tank->Ph_Level,
-                    'Turbidity' => $tank->Turbidity,
-                    'Status' => $tank->Status,
+                    'Mode' => $tank->Mode ?? 'Growing',
+                    'Temperature' => $latest->temperature ?? null,
+                    'Ph_Level' => $latest->ph_level ?? null,
+                    'Turbidity' => $latest->turbidity ?? null,
+                    'Status' => $latest ? $this->computeStatus($latest, $tank->Mode) : 'Unknown',
                     'TimeToDanger' => $prediction ? $prediction->minutes_to_danger . 'minutes' : null,
-                    'LastUpdated' => $latestReading ? $latestReading->timestamp : null,
+                    'LastUpdated' => $latest->timestamp ?? null,
                 ]
             ]);
         } catch (\Exception $e) {
-            Log::info('TankDetail error', ['message' => $e->getMessage()]);
-            return response()->json([
-                'success' => false,
-                'message' => 'Server error'
-            ], 500);
+            Log::error('TankDetail error', ['message' => $e->getMessage()]);
+            return response()->json(['success' => false, 'message' => 'Server error'], 500);
         }
     }
 
