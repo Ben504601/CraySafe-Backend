@@ -143,7 +143,7 @@ class AuthController extends Controller
     {
         $token = $request->bearerToken();
         if (!$token) {
-            return response()->json(['success' => false, 'message' => 'Unathorized'], 401);
+            return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
         }
 
         $parts = explode('|', base64_decode($token));
@@ -218,12 +218,50 @@ class AuthController extends Controller
             return 'Safe';
     }
 
+    // Compute TTD for all parameters
+    public function computeAllTTD($tankId, $mode)
+    {
+        $readings = DB::table('sensor_data')
+            ->where('tank_id', $tankId)
+            ->orderBy('timestamp', 'desc')
+            ->limit(21)
+            ->get()
+            ->reverse()
+            ->values();
+
+        if ($readings->count() < 21) {
+            return ['temperature' => null, 'ph' => null, 'turbidity' => null];
+        }
+
+        $thresholds = $mode === 'Breeding'
+            ? ['temperature' => [18, 26], 'ph' => [6.8, 8.7], 'turbidity' => [0, 70]]
+            : ['temperature' => [20, 28], 'ph' => [6.5, 8.5], 'turbidity' => [0, 100]];
+
+        return [
+            'temperature' => $this->computeTimeToDanger(
+                $readings->pluck('temperature')->toArray(),
+                $readings->pluck('timestamp')->toArray(),
+                $thresholds['temperature']
+            ),
+            'ph' => $this->computeTimeToDanger (
+                $readings->pluck('ph_level')->toArray(),
+                $readings->pluck('timestamp')->toArray(),
+                $thresholds['ph']
+            ),
+            'turbidity' => $this->computeTimeToDanger (
+                $readings->pluck('turbidity')->toArray(),
+                $readings->pluck('timestamp')->toArray(),
+                $thresholds['turbidity']
+            ),
+        ];
+    }
+
     public function tankDetail(Request $request, $tankId)
     {
         try {
             $token = $request->bearerToken();
             if (!$token) {
-                return response()->json(['success' => false, 'message' => 'Unathorized'], 401);
+                return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
             }
             $parts = explode('|', base64_decode($token));
             $userId = $parts[0] ?? null;
@@ -250,11 +288,7 @@ class AuthController extends Controller
                 ->orderBy('timestamp', 'desc')
                 ->first();
 
-            // Latest prediction
-            $prediction = DB::table('predictions')
-                ->where('tank_id', $tankId)
-                ->orderBy('created_at', 'desc')
-                ->first();
+            $ttd = $this->computeAllTTD($tankId, $tank->Mode ?? 'Growing');
 
             return response()->json([
                 'success' => true,
@@ -266,12 +300,61 @@ class AuthController extends Controller
                     'Ph_Level' => $latest->ph_level ?? null,
                     'Turbidity' => $latest->turbidity ?? null,
                     'Status' => $latest ? $this->computeStatus($latest, $tank->Mode) : 'Unknown',
-                    'TimeToDanger' => $prediction ? $prediction->minutes_to_danger . 'minutes' : null,
                     'LastUpdated' => $latest->timestamp ?? null,
+                    'TemperatureTTD' => $ttd['temperature'] ? $ttd['temperature']['minutes'] : null,
+                    'PhTTD' => $ttd['ph'] ? $ttd['ph']['minutes'] : null,
+                    'TurbidityTTD' => $ttd['turbidity'] ? $ttd['turbidity']['minutes'] : null
                 ]
             ]);
         } catch (\Exception $e) {
             Log::error('TankDetail error', ['message' => $e->getMessage()]);
+            return response()->json(['success' => false, 'message' => 'Server error'], 500);
+        }
+    }
+
+    public function switchMode(Request $request, $tankId)
+    {
+        try {
+            $token = $request->bearerToken();
+            if (!$token) {
+                return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
+            }
+            $parts = explode('|', base64_decode($token));
+            $userId = $parts[0] ?? null;
+            if (!$userId) {
+                return response()->json(['success' => false, 'message' => 'Invalid token'], 401);
+            }
+
+            $request->validate([
+                'mode' => 'required|string|in:Growing,Breeding'
+            ]);
+
+            $newMode = $request->mode;
+
+            $tank = DB::table('dashboard')
+                ->where('TankID', $tankId)
+                ->where('UserID', $userId)
+                ->first();
+
+            if (!$tank) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Tank not found or unauthorized'
+                ], 404);
+            }
+
+            DB::table('dashboard')
+                ->where('TankID', $tankId)
+                ->where('UserID', $userId)
+                ->update(['Mode' => $newMode]);
+
+            return response()->json([
+                'success' => true,
+                'message' => "Switched to $newMode mode",
+                'new_mode' => $newMode
+            ]);
+        } catch (\Exception $e) {
+            Log::error('SwitchMode error', ['message' => $e->getMessage()]);
             return response()->json(['success' => false, 'message' => 'Server error'], 500);
         }
     }
