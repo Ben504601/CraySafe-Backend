@@ -673,4 +673,177 @@ class AuthController extends Controller
 
         return $x;
     }
+
+    public function getAlerts(Request $request)
+    {
+        try {
+            $token = $request->bearerToken();
+            if (!$token) {
+                return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
+            }
+            $parts = explode('|', base64_decode($token));
+            $userId = $parts[0] ?? null;
+            if (!$userId) {
+                return response()->json(['success' => false, 'message' => 'Invalid token'], 401);
+            }
+
+            $alerts = DB::table('alerts')
+                ->join('dashboard', 'alerts.tank_id', '=', 'dashboard.TankID')
+                ->where('dashboard.UserID', $userId)
+                ->orderBy('alerts.alert_date', 'desc')
+                ->select(
+                    'alerts.alert_id',
+                    'alerts.tank_id',
+                    'alerts.alert_type',
+                    'alerts.message',
+                    'alerts.status',
+                    'alerts.alert_date',
+                    'dashboard.TankID as tank_name'
+                )
+                ->limit(50)
+                ->get();
+            
+            $unreadCount = $alerts->where('status', 'unread')->count();
+
+            return response()->json([
+                'success' => true,
+                'data' => $alerts,
+                'unread_count' => $unreadCount,
+                'message' => 'Alerts loaded'
+            ]);
+        } catch (\EXception $e) {
+            Log::error('GetAlerts error', ['message' => $e->getMessage()]);
+            return response()->json(['success' => false, 'message' => 'Server error'], 500);
+        }
+    }
+
+    public function markAlertRead(Request $request, $alertId)
+    {
+        try {
+            $token = $request->bearerToken();
+            if (!$token) {
+                return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
+            }
+            $parts = explode('|', base64_decode($token));
+            $userId = $parts[0] ?? null;
+
+            $alert = DB::table('alerts')
+                ->join('dashboard', 'alerts.tank_id', '=', 'dashboard.TankID')
+                ->where('alerts.alert_id', $alertId)
+                ->where('dashboard.UserID', $userId)
+                ->select('alerts.alert_id')
+                ->first();
+
+            if (!$alert) {
+                return response()->json(['success' => false, 'message' => 'Alert not found'], 404);
+            }
+
+            DB::table('alerts')
+                ->where('alert_id', $alertId)
+                ->update(['status' => 'read']);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Alert marked as read'
+            ]);
+        } catch (\Exception $e) {
+            Log::error('MarkAlertRead error', ['message' => $e->getMessage()]);
+            return response()->json(['success' => false, 'message' => 'Server error'], 500);
+        }
+    }
+
+    public function postSensorData(Request $request)
+    {
+        try {
+            $request->validate([
+                'product_id' => 'required|string|exists:purchase_id',
+                'temperature' => 'required|numeric',
+                'ph_level' => 'required|numeric',
+                'turbidity' => 'required|numeric',
+            ]);
+
+            $tank = DB::table('tanks')
+                ->where('ProductID', $request->product_id)
+                ->first();
+
+            if (!$tank) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Product ID not paired to any tank'
+                ], 404);
+            }
+
+            $dataId = DB::table('sensor_data')->insertGetId([
+                'tank_id' => $tank->TankID,
+                'temperature' => $request->temperature,
+                'ph_level' => $request->ph_level,
+                'turbidity' => $request->turbidity,
+                'timestamp' => now()
+            ]);
+
+            $dashboard = DB::table('dashboard')
+                ->where('TankID', $tank->TankID)
+                ->first();
+            $mode = $dashboard->Mode ?? 'Growing';
+
+            $this->checkAndCreateAlerts($tank->TankID, $request, $mode);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Sensor data recorded',
+                'data_id' => $dataId
+            ], 201);
+        } catch (\Exception $e) {
+            Log::error('PostSensorData error', ['message' => $e->getMessage()]);
+            return response()->json(['success' => false, 'message' => 'Server error'], 500);
+        }
+    }
+
+    private function checkAndCreateAlerts($tankId, $reading, $mode)
+    {
+        $thresholds = $mode === 'Breeding'
+            ? [
+                'temperature' => ['safe' => [18, 26], 'label' => 'Temperature'],
+                'ph' => ['safe' => [6.8, 8.7], 'label' => 'pH'],
+                'turbidity' => ['safe' => [0, 70], 'label' => 'Turbidity'],
+            ]
+            : [
+                'temperature' => ['safe' => [20, 28], 'label' => 'Temperature'],
+                'ph' => ['safe' => [6.5, 8.5], 'label' => 'pH'],
+                'turbidity' => ['safe' => [0, 100], 'label' => 'Turbidity'],
+            ];
+
+        $values = [
+            'temperature' => $reading->temperature,
+            'ph' => $reading->ph_level,
+            'turbidity' => $reading->turbidity,
+        ];
+
+        foreach ($thresholds as $key => $config) {
+            $value = $values[$key];
+            [$min, $max] = $config['safe'];
+
+            if ($value < $min || $value > $max) {
+                $direction = $value > $max ? 'high' : 'low';
+                $alertType = $config['label'];
+
+                $recent = DB::table('alerts')
+                    ->where('tank_id', $tankId)
+                    ->where('alert_type', $alertType)
+                    ->where('status'. 'unread')
+                    ->where('alert_date', '>=', now()->subHours(6))
+                    ->exists();
+
+                if (!$recent) {
+                    DB::table('alerts')->insert([
+                        'tank_id' => $tankId,
+                        'alert_type' => $alertType,
+                        'message' => "{$alertType} is too {$direction} at {$value} (safe range: {$min}-{$max})",
+                        'status' => 'unread',
+                        'alert_date' => now(),
+                    ]);
+                }
+            }
+        }
+    }
 }
