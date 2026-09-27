@@ -7,6 +7,9 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\DB;
+use Kreait\Firebase\Factory;
+use Kreait\Firebase\Messaging\CloudMessage;
+use Kreait\Firebase\Messaging\Notification as FirebaseNotification;
 
 class AuthController extends Controller
 {
@@ -689,6 +692,7 @@ class AuthController extends Controller
 
             $alerts = DB::table('alerts')
                 ->join('dashboard', 'alerts.tank_id', '=', 'dashboard.TankID')
+                ->join('tanks', 'alerts.tank_id', '=', 'tanks.TankID')
                 ->where('dashboard.UserID', $userId)
                 ->orderBy('alerts.alert_date', 'desc')
                 ->select(
@@ -698,7 +702,7 @@ class AuthController extends Controller
                     'alerts.message',
                     'alerts.status',
                     'alerts.alert_date',
-                    'dashboard.TankID as tank_name'
+                    'tanks.Tankname as tank_name'
                 )
                 ->limit(50)
                 ->get();
@@ -711,7 +715,7 @@ class AuthController extends Controller
                 'unread_count' => $unreadCount,
                 'message' => 'Alerts loaded'
             ]);
-        } catch (\EXception $e) {
+        } catch (\Exception $e) {
             Log::error('GetAlerts error', ['message' => $e->getMessage()]);
             return response()->json(['success' => false, 'message' => 'Server error'], 500);
         }
@@ -756,7 +760,7 @@ class AuthController extends Controller
     {
         try {
             $request->validate([
-                'product_id' => 'required|string|exists:purchase_id',
+                'product_id' => 'required|string|exists:purchases,purchase_id',
                 'temperature' => 'required|numeric',
                 'ph_level' => 'required|numeric',
                 'turbidity' => 'required|numeric',
@@ -801,16 +805,21 @@ class AuthController extends Controller
 
     private function checkAndCreateAlerts($tankId, $reading, $mode)
     {
+        $dashboard = DB::table('dashboard')
+            ->where('TankID', $tankId)
+            ->first();
+        $ownerId = $dashboard->UserID ?? null;
+
         $thresholds = $mode === 'Breeding'
             ? [
-                'temperature' => ['safe' => [18, 26], 'label' => 'Temperature'],
-                'ph' => ['safe' => [6.8, 8.7], 'label' => 'pH'],
-                'turbidity' => ['safe' => [0, 70], 'label' => 'Turbidity'],
+                'temperature' => ['safe' => [18, 26], 'label' => 'Temperature', 'unit' => '°C'],
+                'ph' => ['safe' => [6.8, 8.7], 'label' => 'pH', 'unit' => 'ph'],
+                'turbidity' => ['safe' => [0, 70], 'label' => 'Turbidity', 'unit' => 'NTU'],
             ]
             : [
-                'temperature' => ['safe' => [20, 28], 'label' => 'Temperature'],
-                'ph' => ['safe' => [6.5, 8.5], 'label' => 'pH'],
-                'turbidity' => ['safe' => [0, 100], 'label' => 'Turbidity'],
+                'temperature' => ['safe' => [20, 28], 'label' => 'Temperature', 'unit' => '°C'],
+                'ph' => ['safe' => [6.5, 8.5], 'label' => 'pH', 'unit' => 'ph'],
+                'turbidity' => ['safe' => [0, 100], 'label' => 'Turbidity', 'unit' => 'NTU'],
             ];
 
         $values = [
@@ -822,28 +831,175 @@ class AuthController extends Controller
         foreach ($thresholds as $key => $config) {
             $value = $values[$key];
             [$min, $max] = $config['safe'];
-
+            $label = $config['label'];
+            $unit = $config['unit'];
+            
             if ($value < $min || $value > $max) {
                 $direction = $value > $max ? 'high' : 'low';
-                $alertType = $config['label'];
+                $message = "🔴 CRITICAL: {$label} is too {$direction} at {$value}{$unit} (safe range: {$min}-{$max})";
 
-                $recent = DB::table('alerts')
-                    ->where('tank_id', $tankId)
-                    ->where('alert_type', $alertType)
-                    ->where('status'. 'unread')
-                    ->where('alert_date', '>=', now()->subHours(6))
-                    ->exists();
+                $this->createAlertIfUnique(
+                    $tankId, $ownerId, 'Critical', $label, $message, 6, 'high'
+                );
+                continue;
+            }
 
-                if (!$recent) {
-                    DB::table('alerts')->insert([
-                        'tank_id' => $tankId,
-                        'alert_type' => $alertType,
-                        'message' => "{$alertType} is too {$direction} at {$value} (safe range: {$min}-{$max})",
-                        'status' => 'unread',
-                        'alert_date' => now(),
-                    ]);
+            $warningBuffer = ($max - $min) * 0.1;
+            $nearLow = $value < ($min + $warningBuffer);
+            $nearHigh = $value > ($max - $warningBuffer);
+
+            if ($nearLow || $nearHigh) {
+                $direction = $nearHigh ? 'high' : 'low';
+                $message = "🟠 WARNING: {$label} is approaching the {$direction} limit at {$value}{$unit} (safe range: {$min}-{$max})";
+
+                $this->createAlertIfUnique(
+                    $tankId, $ownerId, 'Warning', $label, $message, 12, 'default'
+                );
+            }
+
+            $ttd = $this->computeTTDForParameter($tankId, $key, $config['safe']);
+            if ($ttd !== null && $ttd['minutes'] <= 24 * 60) {
+                $hours = round($ttd['minutes'] / 60, 1);
+                $message = "🟡 PREDICTION: {$label} will reach {$ttd['predicted_value']}{$unit} in ~{$hours} hours. Act now.";
+
+                $this->createAlertIfUnique(
+                    $tankId, $ownerId, 'Time-to-Danger', $label, $message, 24, 'default'
+                );
+            }
+        }
+    }
+
+    private function createAlertIfUnique(
+        $tankId, $ownerId, $category, $parameterLabel, $message, $dedupHours, $priority
+    ) {
+        // Composite alert type for better deduplication
+        $alertType = "{$category}:{$parameterLabel}";  // e.g., "Critical:Temperature"
+
+        $recent = DB::table('alerts')
+            ->where('tank_id', $tankId)
+            ->where('alert_type', $alertType)
+            ->where('status', 'unread')
+            ->where('alert_date', '>=', now()->subHours($dedupHours))
+            ->exists();
+
+        if ($recent) return;  // skip duplicate
+
+        $alertId = DB::table('alerts')->insertGetId([
+            'tank_id'    => $tankId,
+            'alert_type' => $alertType,
+            'message'    => $message,
+            'status'     => 'unread',
+            'alert_date' => now(),
+        ]);
+
+        if ($ownerId) {
+            $title = match($category) {
+                'Critical'         => "🔴 CraySafe Alert",
+                'Warning'          => "🟠 CraySafe Warning",
+                'Time-to-Danger'   => "🟡 CraySafe Prediction",
+                default            => "CraySafe Alert",
+            };
+
+            $this->sendPushToUser($ownerId, $title, $message, $alertId, $priority);
+        }
+    }
+
+    private function computeTTDForParameter($tankId, $parameterKey, $range)
+    {
+        $readings = DB::table('sensor_data')
+            ->where('tank_id', $tankId)
+            ->orderBy('timestamp', 'desc')
+            ->limit(21)
+            ->get()
+            ->reverse()
+            ->values();
+
+        if ($readings->count() < 21) return null;
+
+        // Map logical key to actual column
+        $column = match($parameterKey) {
+            'temperature' => 'temperature',
+            'ph'          => 'ph_level',
+            'turbidity'   => 'turbidity',
+        };
+
+        return $this->computeTimeToDanger(
+            $readings->pluck($column)->toArray(),
+            $readings->pluck('timestamp')->toArray(),
+            $range
+        );
+    }
+
+    public function saveFcmToken(Request $request)
+    {
+        try {
+            $request->validate(['fcm_token' => 'required|string']);
+            $token = $request->bearerToken();
+            if (!$token) {
+                return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
+            }
+            $parts = explode('|', base64_decode($token));
+            $userId = $parts[0] ?? null;
+
+            DB::table('user_fcm_tokens')->updateOrInsert(
+                ['fcm_token' => $request->fcm_token],
+                ['user_id' => $userId, 'updated_at' => now()]
+            );
+            return response()->json(['success' => true, 'message' => 'Token saved']);
+        } catch (\Exception $e) {
+            Log::error('SaveFcmToken error', ['message' => $e->getMessage()]);
+            return response()->json(['success' => false, 'message' => 'Server error'], 500);
+        }
+    }
+
+    private function sendPushToUser($userId, $title, $body, $alertId = null, $priority = 'default')
+    {
+        $tokens = DB::table('user_fcm_tokens')
+            ->where('user_id', $userId)
+            ->pluck('fcm_token')
+            ->toArray();
+
+        if (empty($tokens)) return;
+
+        $credentialsPath = storage_path('app/firebase/service-account.json');
+        if (!file_exists($credentialsPath)) {
+            Log::warning('FCM: credentials file not found');
+            return;
+        }
+
+        try {
+            $factory = (new Factory())->withServiceAccount($credentialsPath);
+            $messaging = $factory->createMessaging();
+
+            $notification = FirebaseNotification::create($title, $body);
+
+            foreach ($tokens as $token) {
+                try {
+                    $message = CloudMessage::withTarget('token', $token)
+                        ->withNotification($notification)
+                        ->withData([
+                            'alert_id'     => (string) $alertId,
+                            'click_action' => 'OPEN_ALERTS',
+                            'priority'     => $priority,   // ← new
+                        ])
+                        ->withAndroidConfig(
+                            \Kreait\Firebase\Messaging\AndroidConfig::fromArray([
+                                'priority' => $priority === 'high' ? 'high' : 'normal',
+                                'notification' => [
+                                    'channel_id' => 'craysafe_alerts_channel',
+                                    'sound'      => 'default',
+                                ],
+                            ])
+                        );
+
+                    $messaging->send($message);
+                    Log::info('FCM sent', ['alert_id' => $alertId, 'priority' => $priority]);
+                } catch (\Exception $e) {
+                    Log::warning('FCM failed for token', ['error' => $e->getMessage()]);
                 }
             }
+        } catch (\Exception $e) {
+            Log::error('FCM v1 error', ['message' => $e->getMessage()]);
         }
     }
 }

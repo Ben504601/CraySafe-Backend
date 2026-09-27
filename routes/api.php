@@ -21,6 +21,8 @@ Route::post('/alerts/{id}/read', [AuthController::class, 'markAlertRead']);
 
 Route::post('/sensor-data', [AuthController::class, 'postSensorData']);
 
+Route::post('/fcm-token', [AuthController::class, 'saveFcmToken']);
+
 // TEST ROUTE
 Route::get('/test', function () {
     return response()->json([
