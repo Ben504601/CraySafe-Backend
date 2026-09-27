@@ -991,7 +991,7 @@ class AuthController extends Controller
                             \Kreait\Firebase\Messaging\AndroidConfig::fromArray([
                                 'priority' => $priority === 'high' ? 'high' : 'normal',
                                 'notification' => [
-                                    'channel_id' => '$channelId',
+                                    'channel_id' => $channelId,
                                     'sound' => 'default',
                                 ],
                             ])
