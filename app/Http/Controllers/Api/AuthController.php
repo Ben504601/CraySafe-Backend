@@ -975,19 +975,24 @@ class AuthController extends Controller
 
             foreach ($tokens as $token) {
                 try {
+
+                    $channelId = $priority === 'high'
+                        ? 'craysafe_critical'
+                        : 'craysafe_alerts_channel';
+
                     $message = CloudMessage::withTarget('token', $token)
                         ->withNotification($notification)
                         ->withData([
-                            'alert_id'     => (string) $alertId,
+                            'alert_id' => (string) $alertId,
                             'click_action' => 'OPEN_ALERTS',
-                            'priority'     => $priority,   // ← new
+                            'priority' => $priority,
                         ])
                         ->withAndroidConfig(
                             \Kreait\Firebase\Messaging\AndroidConfig::fromArray([
                                 'priority' => $priority === 'high' ? 'high' : 'normal',
                                 'notification' => [
-                                    'channel_id' => 'craysafe_alerts_channel',
-                                    'sound'      => 'default',
+                                    'channel_id' => '$channelId',
+                                    'sound' => 'default',
                                 ],
                             ])
                         );
