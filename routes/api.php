@@ -2,6 +2,7 @@
 
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\AuthController;
+use Illuminate\Support\Facades\DB;
 
 Route::post('/login', [AuthController::class, 'login']);
 
@@ -34,6 +35,22 @@ Route::get('/test', function () {
         'message' => 'API is working!',
         'time' => now()->toDateTimeString()
     ]);
+});
+
+Route::get('/db-test', function() {
+    try {
+        DB::connection()->getPdo();
+        return 'DB OK: ' . DB::connection()->getDatabaseName();
+    } catch (\Throwable $e) {
+        return get_class($e) . ': ' . $e->getMessage();
+    }
+});
+
+Route::get('/tcp-test', function () {
+    $host = env('DB_HOST');
+    $port = (int) env('DB_PORT', 3306);
+    $fp = @fsockopen($host, $port, $errno, $errstr, 5);
+    return $fp ? 'TCP OK' : "TCP FAIL: $errno $errstr";
 });
 
 Route::post('/pair-tank', [AuthController::class, 'pairTank']);
