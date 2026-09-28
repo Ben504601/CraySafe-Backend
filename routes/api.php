@@ -53,6 +53,16 @@ Route::get('/tcp-test', function () {
     return $fp ? 'TCP OK' : "TCP FAIL: $errno $errstr";
 });
 
+Route::get('/pdo-test', function () {
+    try {
+        $dsn = "mysql:host=" . env('DB_HOST') . ";port=" . env('DB_PORT') . ";dbname=" . env('DB_DATABASE');
+        $pdo = new PDO($dsn, env('DB_USERNAME'), env('DB_PASSWORD'));
+        return "PDO Connection Successful!";
+    } catch (PDOException $e) {
+        return "PDO Connection Failed: " . $e->getMessage();
+    }
+});
+
 Route::post('/pair-tank', [AuthController::class, 'pairTank']);
 
 Route::get('/ping', function () {
