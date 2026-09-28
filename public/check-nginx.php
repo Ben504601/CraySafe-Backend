@@ -1,34 +1,24 @@
 <?php
-echo "<h2>Config files in project</h2>";
-echo "<pre>";
-if (file_exists('/var/www/html/conf/nginx/site.conf')) {
-    echo "✅ site.conf exists\n";
+echo "<h2>Active nginx config (default.conf)</h2>";
+$path = '/etc/nginx/sites-enabled/default.conf';
+if (file_exists($path)) {
+    echo "<pre style='background:#f4f4f4;padding:10px;'>";
+    echo htmlspecialchars(file_get_contents($path));
+    echo "</pre>";
 } else {
-    echo "❌ site.conf MISSING\n";
-}
-if (is_dir('/var/www/html/conf/nginx/site.conf.d')) {
-    echo "📁 site.conf.d exists: " . implode(', ', scandir('/var/www/html/conf/nginx/site.conf.d')) . "\n";
-}
-echo "</pre>";
-
-echo "<h2>Files nginx actually reads</h2>";
-echo "<pre>";
-if (is_dir('/etc/nginx/sites-enabled')) {
-    foreach (scandir('/etc/nginx/sites-enabled') as $f) {
-        if ($f !== '.' && $f !== '..') {
-            echo "📄 $f\n";
+    echo "❌ Not found at $path";
+    // Try the real path if it's a symlink
+    $real = @readlink($path);
+    if ($real) {
+        echo "<br>Symlink points to: $real";
+        if (file_exists($real)) {
+            echo "<pre>" . htmlspecialchars(file_get_contents($real)) . "</pre>";
         }
     }
-} else {
-    echo "❌ /etc/nginx/sites-enabled does not exist\n";
 }
-echo "</pre>";
 
-echo "<h2>Default site config contents</h2>";
-echo "<pre>";
-if (file_exists('/etc/nginx/sites-enabled/default')) {
-    echo htmlspecialchars(file_get_contents('/etc/nginx/sites-enabled/default'));
-} else {
-    echo "❌ No default file";
-}
-echo "</pre>";
+echo "<h2>Does it contain Laravel's try_files?</h2>";
+$content = @file_get_contents($path);
+echo (strpos($content, 'try_files') !== false)
+    ? "✅ Yes — Laravel routing is configured"
+    : "❌ No — this is still the default nginx config";
