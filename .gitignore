@@ -12,6 +12,16 @@ auth.json
 storage/*.key
 storage/*.lock
 storage/*.json
+/storage/framework/views/*
+!/storage/framework/views/.gitkeep
+/storage/framework/sessions/*
+!/storage/framework/sessions/.gitkeep
+/storage/framework/cache/data/*
+!/storage/framework/cache/data/.gitkeep
+/storage/logs/*
+!/storage/logs/.gitkeep
+/bootstrap/cache/*
+!/bootstrap/cache/.gitkeep
 
 # Compiled files
 *.pyc
