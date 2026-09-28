@@ -17,11 +17,15 @@ Route::get('/tank/{id}/time-to-danger', [AuthController::class, 'timeToDanger'])
 
 Route::get('/alerts', [AuthController::class, 'getAlerts']);
 
+Route::get('/alerts/unread-count', [AuthController::class, 'getUnreadAlertCount']);
+
 Route::post('/alerts/{id}/read', [AuthController::class, 'markAlertRead']);
 
 Route::post('/sensor-data', [AuthController::class, 'postSensorData']);
 
 Route::post('/fcm-token', [AuthController::class, 'saveFcmToken']);
+
+Route::get('/support/qa', [AuthController::class, 'getDiagnosticQnA']);
 
 // TEST ROUTE
 Route::get('/test', function () {

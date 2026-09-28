@@ -1007,4 +1007,71 @@ class AuthController extends Controller
             Log::error('FCM v1 error', ['message' => $e->getMessage()]);
         }
     }
+
+    public function getDiagnosticQnA(Request $request)
+    {
+        try {
+            $token = $request->bearerToken();
+            if (!$token) {
+                return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
+            }
+
+            $search = $request->query('search');
+            $category = $request->query('category');
+
+            $query = DB::table('qa_diagnostics');
+
+            if ($search) {
+                $query->where(function ($q) use ($search) {
+                    $q->where('issue_title', 'like', "%{$search}%")
+                        ->orWhere('solution', 'like', "%{$search}%");
+                });
+            }
+
+            if ($category && in_array($category, ['Hardware', 'Software', 'Crayfish Health'])) {
+                $query->where('category', $category);
+            }
+
+            $items = $query->orderBy('category')->orderBy('issue_title')->get();
+
+            return response()->json([
+                'success' => true,
+                'data' => $items,
+                'message' => 'Q&A loaded'
+            ]);
+        } catch (\Exception $e) {
+            Log::error('GetDiagnosticQnA error', ['message' => $e->getMessage()]);
+            return response()->json(['success' => false, 'message' => 'Server error'], 500);
+        }
+    }
+
+    public function getUnreadAlertCount(Request $request)
+    {
+        try {
+            $token = $request->bearerToken();
+            if (!$token) {
+                return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
+            }
+            $parts = explode('|', base64_decode($token));
+            $userId = $parts[0] ?? null;
+            if (!$userId) {
+                return response()->json(['success' => false, 'message' => 'Invalid token'], 401);
+            }
+
+            $count = DB::table('alerts')
+                ->join('dashboard', 'alerts.tank_id', '=', 'dashboard.TankID')
+                ->where('dashboard.UserID', $userId)
+                ->where('alerts.status', 'unread')
+                ->count();
+
+            return response()->json([
+                'success' => true,
+                'count' => $count,
+                'message' => 'Unread count loaded'
+            ]);
+        } catch (\Exception $e) {
+            Log::error('GetUnreadAlertCount error', ['message' => $e->getMessage()]);
+            return response()->json(['success' => false, 'message' => 'Server error'], 500);
+        }
+    }
 }
