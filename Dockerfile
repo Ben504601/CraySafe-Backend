@@ -3,17 +3,6 @@ FROM richarvey/nginx-php-fpm:latest
 COPY . /var/www/html
 WORKDIR /var/www/html
 
-# ✅ Create Laravel's writable directories and set permissions
-RUN mkdir -p \
-    storage/app/public \
-    storage/app/firebase \
-    storage/framework/cache/data \
-    storage/framework/sessions \
-    storage/framework/views \
-    storage/logs \
-    bootstrap/cache \
-    && chmod -R 777 storage bootstrap/cache
-
 ENV SKIP_COMPOSER 1
 ENV WEBROOT /var/www/html/public
 ENV PHP_ERRORS_STDERR 1
