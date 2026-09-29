@@ -63,6 +63,26 @@ Route::get('/pdo-test', function () {
     }
 });
 
+Route::get('/env-check', function () {
+    return response()->json([
+        'DB_HOST' => config('database.connections.mysql.host'),
+        'DB_PORT' => config('database.connections.mysql.port'),
+        'DB_DATABASE' => config('database.connections.mysql.database'),
+        'DB_USERNAME' => config('database.connections.mysql.username'),
+        'DB_PASSWORD_SET' => !empty(config('database.connections.mysql.password')),
+    ]);
+});
+
+Route::get('/env-raw', function () {
+    return response()->json([
+        'DB_HOST' => env('DB_HOST'),
+        'DB_PORT' => env('DB_PORT'),
+        'DB_DATABASE' => env('DB_DATABASE'),
+        'DB_USERNAME' => env('DB_USERNAME'),
+        'DB_PASSWORD_SET' => !empty(env('DB_PASSWORD')),
+    ]);
+});
+
 Route::post('/pair-tank', [AuthController::class, 'pairTank']);
 
 Route::get('/ping', function () {
