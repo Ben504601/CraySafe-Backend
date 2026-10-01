@@ -173,16 +173,23 @@ class AuthController extends Controller
                 ->orderBy('timestamp', 'desc')
                 ->first();
 
+            $mode = $tank->Mode ?? 'Growing';
+
+            // Compute TTD for this tank so we can use it in the status
+            $ttd = $latest ? $this->computeAllTTD($tank->TankID, $mode) : null;
+
             return [
-                'DashboardID' => $tank->TankID, // Used as ID
+                'DashboardID' => $tank->TankID,
                 'UserID' => null,
                 'TankID' => $tank->TankID,
                 'Tankname' => $tank->Tankname,
-                'Mode' => $tank->Mode ?? 'Growing',
+                'Mode' => $mode,
                 'Temperature' => $latest->temperature ?? null,
                 'Ph_Level' => $latest->ph_level ?? null,
                 'Turbidity' => $latest->turbidity ?? null,
-                'Status' => $latest ? $this->computeStatus($latest, $tank->Mode) : 'Unknown',
+                'Status' => $latest
+                    ? $this->computeOverallStatus($latest, $mode, $ttd)
+                    : 'Unknown',
             ];
         });
 
@@ -302,7 +309,9 @@ class AuthController extends Controller
                     'Temperature' => $latest->temperature ?? null,
                     'Ph_Level' => $latest->ph_level ?? null,
                     'Turbidity' => $latest->turbidity ?? null,
-                    'Status' => $latest ? $this->computeStatus($latest, $tank->Mode) : 'Unknown',
+                    'Status' => $latest
+                        ? $this->computeOverallStatus($latest, $tank->Mode ?? 'Growing', $ttd)
+                        : 'Unknown',
                     'LastUpdated' => $latest->timestamp ?? null,
                     'TemperatureTTD' => $ttd['temperature'] ? $ttd['temperature']['minutes'] : null,
                     'PhTTD' => $ttd['ph'] ? $ttd['ph']['minutes'] : null,
@@ -1073,5 +1082,38 @@ class AuthController extends Controller
             Log::error('GetUnreadAlertCount error', ['message' => $e->getMessage()]);
             return response()->json(['success' => false, 'message' => 'Server error'], 500);
         }
+    }
+
+    private function computeOverallStatus($reading, $mode, $ttd = null)
+    {
+        $currentStatus = $this->computeStatus($reading, $mode);
+
+        if ($ttd === null) {
+            return $currentStatus;
+        }
+
+        $ttdStatus = 'Safe';
+        foreach (['temperature', 'ph', 'turbidity'] as $key) {
+            $prediction = $ttd[$key] ?? null;
+            if ($prediction === null) continue;
+
+            $minutes = $prediction['minutes'];
+
+            if ($minutes < 60) {
+                $ttdStatus = 'Critical';
+                break;
+            } elseif ($minutes < 4 * 60) {
+                if ($ttdStatus !== 'Critical') {
+                    $ttdStatus = 'Warning';
+                }
+            } elseif ($minutes < 24 * 60) {
+                if ($ttdStatus === 'Safe') {
+                    $ttdStatus = 'Warning';
+                }
+            }
+        }
+
+        $rank = ['Safe' => 0, 'Warning' => 1, 'Critical' => 2];
+        return $rank[$ttdStatus] > $rank[$currentStatus] ? $ttdStatus : $currentStatus;
     }
 }
