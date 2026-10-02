@@ -818,71 +818,298 @@ class AuthController extends Controller
             ->where('TankID', $tankId)
             ->first();
         $ownerId = $dashboard->UserID ?? null;
+        $tankName = DB::table('tanks')->where('TankID', $tankId)->value('Tankname') ?? "Tank {$tankId}";
 
         $thresholds = $mode === 'Breeding'
             ? [
                 'temperature' => ['safe' => [18, 26], 'label' => 'Temperature', 'unit' => '°C'],
-                'ph' => ['safe' => [6.8, 8.7], 'label' => 'pH', 'unit' => 'ph'],
-                'turbidity' => ['safe' => [0, 70], 'label' => 'Turbidity', 'unit' => 'NTU'],
+                'ph'          => ['safe' => [6.8, 8.7], 'label' => 'pH', 'unit' => ''],
+                'turbidity'   => ['safe' => [0, 70], 'label' => 'Turbidity', 'unit' => 'NTU'],
             ]
             : [
                 'temperature' => ['safe' => [20, 28], 'label' => 'Temperature', 'unit' => '°C'],
-                'ph' => ['safe' => [6.5, 8.5], 'label' => 'pH', 'unit' => 'ph'],
-                'turbidity' => ['safe' => [0, 100], 'label' => 'Turbidity', 'unit' => 'NTU'],
+                'ph'          => ['safe' => [6.5, 8.5], 'label' => 'pH', 'unit' => ''],
+                'turbidity'   => ['safe' => [0, 100], 'label' => 'Turbidity', 'unit' => 'NTU'],
             ];
 
         $values = [
             'temperature' => $reading->temperature,
-            'ph' => $reading->ph_level,
-            'turbidity' => $reading->turbidity,
+            'ph'          => $reading->ph_level,
+            'turbidity'   => $reading->turbidity,
         ];
 
         foreach ($thresholds as $key => $config) {
             $value = $values[$key];
             [$min, $max] = $config['safe'];
             $label = $config['label'];
-            $unit = $config['unit'];
-            
+            $unit  = $config['unit'];
+
+            // ─────────────────────────────────────────────
+            // SCENARIO 1: CRITICAL — value is outside safe range
+            // ─────────────────────────────────────────────
             if ($value < $min || $value > $max) {
                 $direction = $value > $max ? 'high' : 'low';
-                $message = "🔴 CRITICAL: {$label} is too {$direction} at {$value}{$unit} (safe range: {$min}-{$max})";
+
+                $fullAdvice = $this->getAdvice($key, $direction, 'critical', false);
+                $shortAdvice = $this->getAdvice($key, $direction, 'critical', true);
+
+                $fullMessage = "🔴 CRITICAL: {$label} is too {$direction} at {$value}{$unit} " .
+                               "(safe range: {$min}-{$max}{$unit}).\n\n{$fullAdvice}";
+
+                $pushBody = "{$tankName}: {$label} is too {$direction}. {$shortAdvice}";
 
                 $this->createAlertIfUnique(
-                    $tankId, $ownerId, 'Critical', $label, $message, 6, 'high'
+                    $tankId, $ownerId, 'Critical', $label,
+                    $fullMessage, $pushBody, 6, 'high'
                 );
                 continue;
             }
 
+            // ─────────────────────────────────────────────
+            // SCENARIO 2: WARNING — value is near a limit
+            // ─────────────────────────────────────────────
             $warningBuffer = ($max - $min) * 0.1;
-            $nearLow = $value < ($min + $warningBuffer);
+            $nearLow  = $value < ($min + $warningBuffer);
             $nearHigh = $value > ($max - $warningBuffer);
 
             if ($nearLow || $nearHigh) {
                 $direction = $nearHigh ? 'high' : 'low';
-                $message = "🟠 WARNING: {$label} is approaching the {$direction} limit at {$value}{$unit} (safe range: {$min}-{$max})";
+
+                $fullAdvice = $this->getAdvice($key, $direction, 'warning', false);
+                $shortAdvice = $this->getAdvice($key, $direction, 'warning', true);
+
+                $fullMessage = "🟠 WARNING: {$label} is approaching the {$direction} limit at {$value}{$unit} " .
+                               "(safe range: {$min}-{$max}{$unit}).\n\n{$fullAdvice}";
+
+                $pushBody = "{$tankName}: {$label} near the {$direction} limit. {$shortAdvice}";
 
                 $this->createAlertIfUnique(
-                    $tankId, $ownerId, 'Warning', $label, $message, 12, 'default'
+                    $tankId, $ownerId, 'Warning', $label,
+                    $fullMessage, $pushBody, 12, 'default'
                 );
             }
 
+            // ─────────────────────────────────────────────
+            // SCENARIO 3: TIME-TO-DANGER — prediction says breach is coming
+            // ─────────────────────────────────────────────
             $ttd = $this->computeTTDForParameter($tankId, $key, $config['safe']);
             if ($ttd !== null && $ttd['minutes'] <= 24 * 60) {
+                $direction = $ttd['breach_type']; // 'high' or 'low'
                 $hours = round($ttd['minutes'] / 60, 1);
-                $message = "🟡 PREDICTION: {$label} will reach {$ttd['predicted_value']}{$unit} in ~{$hours} hours. Act now.";
+
+                $fullAdvice  = $this->getAdvice($key, $direction, 'predict', false);
+                $shortAdvice = $this->getAdvice($key, $direction, 'predict', true);
+
+                $fullMessage = "🟡 PREDICTION: {$label} will reach {$ttd['predicted_value']}{$unit} " .
+                               "in approximately {$hours} hours.\n\n{$fullAdvice}";
+
+                $pushBody = "{$tankName}: {$label} predicted to breach in ~{$hours} hr. {$shortAdvice}";
 
                 $this->createAlertIfUnique(
-                    $tankId, $ownerId, 'Time-to-Danger', $label, $message, 24, 'default'
+                    $tankId, $ownerId, 'Time-to-Danger', $label,
+                    $fullMessage, $pushBody, 24, 'default'
                 );
             }
         }
     }
 
+    private function getAdvice($parameter, $direction, $context = 'critical', $short = false)
+    {
+        $key = "{$parameter}_{$direction}";
+
+        // ═════════════════════════════════════════════════════════════
+        // CRITICAL — value is already outside the safe range
+        // ═════════════════════════════════════════════════════════════
+        $critical = [
+            'temperature_high' => [
+                'short' => 'Move tank from sun, add a bentilador, float ice.',
+                'steps' => "What to do (Philippine setup):\n" .
+                    "1. Move the tank away from west-facing windows — afternoons get very hot.\n" .
+                    "2. Point an electric fan (bentilador) across the water surface to cool via evaporation.\n" .
+                    "3. Float a sealed sachet of ice from any sari-sari store (₱5–10). Do NOT dump ice directly.\n" .
+                    "4. Turn off any aquarium heater.\n" .
+                    "5. Do a 10–20% water change using aged tap water (see note below).\n" .
+                    "6. If you have air-conditioning, keep the room at 25–28°C, but beware of brownouts.\n" .
+                    "7. Recheck temperature every 2 hours, especially between 1–4 PM.\n\n" .
+                    "Note on water: Let tap water sit in an open " .
+                    "pail for 24–48 hours before adding — this removes chlorine naturally. Or use a commercial " .
+                    "dechlorinator from Cartimar (Manila), White Gold Club (Cebu), or Bioresearch (Manila).",
+            ],
+            'temperature_low' => [
+                'short' => 'Turn on heater, keep tank away from aircon.',
+                'steps' => "What to do:\n" .
+                    "1. Turn on an aquarium heater and set it to the safe range (check the label).\n" .
+                    "2. Move the tank away from air-conditioner vents or cold tiled floors.\n" .
+                    "3. Partially cover the tank with a lid or cloth to retain heat overnight.\n" .
+                    "4. In airconditioned rooms, run the AC on a timer or raise the thermostat.\n" .
+                    "5. Heaters are ₱250–500 at Cartimar (Manila), White Gold Club (Cebu), or pet shops in SM/Ayala malls.\n\n" .
+                    "Note: Temperature lows are rare in Cebu unless you use AC or keep the tank outdoors " .
+                    "during cold amihan months (Dec–Feb).",
+            ],
+            'ph_high' => [
+                'short' => 'Water change + add talisay leaves or driftwood.',
+                'steps' => "What to do (locally sourced):\n" .
+                    "1. Do a 10–20% water change with aged tap water.\n" .
+                    "2. Add 2–3 dried talisay leaves (Terminalia catappa) — free to collect under talisay trees, " .
+                    "or ₱10–20 per pack at Cartimar or White Gold Club. Tannins slowly lower pH.\n" .
+                    "3. Add a piece of driftwood or mangrove wood (bakawan). Available at aquarium shops.\n" .
+                    "4. Test your tap water source — Cebu water and Metro Manila water differ in pH. " .
+                    "If yours is alkaline, pre-treat by aging 48 hours.\n" .
+                    "5. Remove any crushed coral, limestone, or shells from the tank — they raise pH.\n" .
+                    "6. Avoid pH-down chemicals — they cause dangerous swings that stress crayfish.\n\n" .
+                    "AVOID: baking soda or vinegar — these cause temporary shifts and endanger your crayfish.",
+            ],
+            'ph_low' => [
+                'short' => 'Water change + add crushed coral or shell grit.',
+                'steps' => "What to do (locally sourced):\n" .
+                    "1. Do a 10–20% water change.\n" .
+                    "2. Add crushed coral or shell grit to the filter bag — raises pH slowly and safely.\n" .
+                    "   Available at aquarium shops or feed supply stores (₱50–100 per bag).\n" .
+                    "3. Add a cuttlebone (₱20–50 from any pet shop's bird section). Break into pieces and add to filter.\n" .
+                    "4. Remove decaying plants and leftover food immediately — they acidify water quickly.\n" .
+                    "5. Check your filter media — a clogged sponge filter can drop pH fast in small tanks.\n\n" .
+                    "AVOID: baking soda — it raises pH instantly but crashes it back down within hours, " .
+                    "which is worse than the original problem.",
+            ],
+            'turbidity_high' => [
+                'short' => 'Water change + reduce feeding + clean filter.',
+                'steps' => "What to do (Philippine setup):\n" .
+                    "1. Do a 20–30% water change with aged tap water.\n" .
+                    "2. Reduce feeding. Common PH crayfish foods: commercial sinking pellets (Hikari or local brands), " .
+                    "chopped kalabasa (squash), carrots, kangkong. Remove any food left after 2 hours.\n" .
+                    "3. Vacuum the substrate with a siphon to remove waste.\n" .
+                    "4. Rinse the filter sponge in a bucket of tank water — NOT under tap water " .
+                    "(chlorine kills the beneficial bacteria).\n" .
+                    "5. If your tap water is naturally cloudy, age it 48 hours and check for sediment.\n" .
+                    "6. Test for ammonia — cloudiness often means an ammonia spike. Leftover food " .
+                    "and crayfish waste are the main causes in Philippine setups.\n" .
+                    "7. Consider adding a sponge filter (₱80–150 from any aquarium shop) — cheap and effective.",
+            ],
+        ];
+
+        // ═════════════════════════════════════════════════════════════
+        // WARNING — value is near the limit, not critical yet
+        // ═════════════════════════════════════════════════════════════
+        $warning = [
+            'temperature_high' => [
+                'short' => 'Monitor closely. Have a bentilador and ice ready.',
+                'steps' => "Approaching the upper temperature limit.\n\n" .
+                    "Recommended actions:\n" .
+                    "• Check the room's ambient temperature — Cebu afternoons hit 33–35°C.\n" .
+                    "• Position a bentilador near the tank.\n" .
+                    "• Buy a sachet of ice from a sari-sari store and keep it in the freezer.\n" .
+                    "• Have aged tap water ready for a partial water change.\n" .
+                    "• Watch the trend — Philippine afternoon peaks are usually between 1–4 PM.",
+            ],
+            'temperature_low' => [
+                'short' => 'Monitor closely. Verify heater is working.',
+                'steps' => "Approaching the lower temperature limit.\n\n" .
+                    "Recommended actions:\n" .
+                    "• Verify the aquarium heater is plugged in and functioning.\n" .
+                    "• Check that no aircon vent is blowing directly on the tank.\n" .
+                    "• If during amihan season (Dec–Feb), consider a lid or cover.\n" .
+                    "• Monitor the trend — a slow drop overnight can become critical by morning.",
+            ],
+            'ph_high' => [
+                'short' => 'Monitor closely. Have talisay leaves ready.',
+                'steps' => "Approaching the upper pH limit.\n\n" .
+                    "Recommended actions:\n" .
+                    "• Test your source water — has the water district changed supply?\n" .
+                    "• Have 2–3 dried talisay leaves ready to add.\n" .
+                    "• Avoid overfeeding — leftover food raises pH over time.\n" .
+                    "• Do not add chemicals yet; wait to see if it stabilizes.",
+            ],
+            'ph_low' => [
+                'short' => 'Monitor closely. Have crushed coral ready.',
+                'steps' => "Approaching the lower pH limit.\n\n" .
+                    "Recommended actions:\n" .
+                    "• Remove any decaying plant matter or uneaten food.\n" .
+                    "• Have crushed coral or cuttlebone ready.\n" .
+                    "• Check filter flow — a clogged filter acidifies water.\n" .
+                    "• Test after 24 hours to confirm the trend.",
+            ],
+            'turbidity_high' => [
+                'short' => 'Monitor closely. Reduce feeding and check filter.',
+                'steps' => "Approaching the turbidity limit.\n\n" .
+                    "Recommended actions:\n" .
+                    "• Reduce feeding slightly for the next 2–3 days.\n" .
+                    "• Inspect and rinse the filter sponge (in tank water, not tap water).\n" .
+                    "• Siphon visible debris from the substrate.\n" .
+                    "• Have aged tap water ready for a water change.",
+            ],
+        ];
+
+        // ═════════════════════════════════════════════════════════════
+        // PREDICT — Time-to-Danger forecast says breach is coming
+        // ═════════════════════════════════════════════════════════════
+        $predict = [
+            'temperature_high' => [
+                'short' => 'Trend is rising. Prepare fan and ice now.',
+                'steps' => "Prediction: temperature will reach the critical range soon.\n\n" .
+                    "Act before it happens:\n" .
+                    "• Position a bentilador near the tank.\n" .
+                    "• Buy a sachet of ice and keep it frozen.\n" .
+                    "• Close blinds on west-facing windows during afternoons.\n" .
+                    "• If possible, run the room aircon during peak hours.\n" .
+                    "• Do not wait — Philippine afternoon peaks accelerate the trend.",
+            ],
+            'temperature_low' => [
+                'short' => 'Trend dropping. Prepare heater.',
+                'steps' => "Prediction: temperature will reach the critical range soon.\n\n" .
+                    "Act before it happens:\n" .
+                    "• Prepare the aquarium heater.\n" .
+                    "• Check that no aircon is directed at the tank.\n" .
+                    "• Consider a partial tank cover at night during amihan months.",
+            ],
+            'ph_high' => [
+                'short' => 'Trend rising. Prepare talisay leaves or driftwood.',
+                'steps' => "Prediction: pH will exceed the safe range soon.\n\n" .
+                    "Act before it happens:\n" .
+                    "• Test the tap water source.\n" .
+                    "• Prepare 2–3 dried talisay leaves or a small piece of driftwood.\n" .
+                    "• Avoid adding alkaline decorations (limestone, shells).\n" .
+                    "• Check filter performance — poor filtration can raise pH.",
+            ],
+            'ph_low' => [
+                'short' => 'Trend dropping. Prepare crushed coral.',
+                'steps' => "Prediction: pH will drop below the safe range soon.\n\n" .
+                    "Act before it happens:\n" .
+                    "• Remove decaying plants or leftover food.\n" .
+                    "• Prepare crushed coral or a cuttlebone for the filter.\n" .
+                    "• Test the alkalinity of your source water.",
+            ],
+            'turbidity_high' => [
+                'short' => 'Trend rising. Plan a water change.',
+                'steps' => "Prediction: turbidity will reach the critical range soon.\n\n" .
+                    "Act before it happens:\n" .
+                    "• Reduce feeding amount slightly.\n" .
+                    "• Prepare 20% aged tap water for a change.\n" .
+                    "• Check the filter flow rate — replace if clogged.\n" .
+                    "• Siphon any visible debris from the substrate.",
+            ],
+        ];
+
+        $table = match ($context) {
+            'critical' => $critical,
+            'warning'  => $warning,
+            'predict'  => $predict,
+            default    => $critical,
+        };
+
+        $entry = $table[$key] ?? null;
+        if (!$entry) return null;
+
+        return $short ? $entry['short'] : $entry['steps'];
+    }
+
     private function createAlertIfUnique(
-        $tankId, $ownerId, $category, $parameterLabel, $message, $dedupHours, $priority
+        $tankId, $ownerId, $category, $parameterLabel,
+        $message,        
+        $pushBody,      
+        $dedupHours,
+        $priority
     ) {
-        // Composite alert type for better deduplication
-        $alertType = "{$category}:{$parameterLabel}";  // e.g., "Critical:Temperature"
+        $alertType = "{$category}:{$parameterLabel}";
 
         $recent = DB::table('alerts')
             ->where('tank_id', $tankId)
@@ -891,7 +1118,7 @@ class AuthController extends Controller
             ->where('alert_date', '>=', now()->subHours($dedupHours))
             ->exists();
 
-        if ($recent) return;  // skip duplicate
+        if ($recent) return;
 
         $alertId = DB::table('alerts')->insertGetId([
             'tank_id'    => $tankId,
@@ -903,13 +1130,14 @@ class AuthController extends Controller
 
         if ($ownerId) {
             $title = match($category) {
-                'Critical'         => "🔴 CraySafe Alert",
-                'Warning'          => "🟠 CraySafe Warning",
-                'Time-to-Danger'   => "🟡 CraySafe Prediction",
-                default            => "CraySafe Alert",
+                'Critical'       => "🔴 CraySafe Alert",
+                'Warning'        => "🟠 CraySafe Warning",
+                'Time-to-Danger' => "🟡 CraySafe Prediction",
+                default          => "CraySafe Alert",
             };
 
-            $this->sendPushToUser($ownerId, $title, $message, $alertId, $priority);
+            // ✅ Send the SHORT version as the push body, not the full one
+            $this->sendPushToUser($ownerId, $title, $pushBody, $alertId, $priority);
         }
     }
 
