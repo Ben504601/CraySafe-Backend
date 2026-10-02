@@ -968,13 +968,32 @@ class AuthController extends Controller
             ->pluck('fcm_token')
             ->toArray();
 
-        if (empty($tokens)) return;
-
-        $credentialsPath = storage_path('app/firebase/service-account.json');
-        if (!file_exists($credentialsPath)) {
-            Log::warning('FCM: credentials file not found');
+        if (empty($tokens)) {
+            Log::info('FCM: no tokens for user', ['user_id' => $userId]);
             return;
         }
+
+        $candidatePaths = [
+            '/etc/secrets/service-account.json',
+            storage_path('app/firebase/service-account.json'),
+        ];
+
+        $credentialsPath = null;
+        foreach ($candidatePaths as $path) {
+            if (file_exists($path)) {
+                $credentialsPath = $path;
+                break;
+            }
+        }
+
+        if (!$credentialsPath) {
+            LOG::warning('FCM: credentials file not found in any known location', [
+                'tried' => $candidatePaths,
+            ]);
+            return;
+        }
+
+        Log::info('FCM: using credentials file', ['path' => $credentialsPath]);
 
         try {
             $factory = (new Factory())->withServiceAccount($credentialsPath);
@@ -1009,7 +1028,10 @@ class AuthController extends Controller
                     $messaging->send($message);
                     Log::info('FCM sent', ['alert_id' => $alertId, 'priority' => $priority]);
                 } catch (\Exception $e) {
-                    Log::warning('FCM failed for token', ['error' => $e->getMessage()]);
+                    Log::warning('FCM failed for token', [
+                        'token_tail' => substr($token, -10),
+                        'error' => $e->getMessage()
+                    ]);
                 }
             }
         } catch (\Exception $e) {
