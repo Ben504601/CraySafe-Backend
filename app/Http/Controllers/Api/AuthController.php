@@ -974,8 +974,8 @@ class AuthController extends Controller
         }
 
         $candidatePaths = [
-            '/etc/secrets/service-account.json',
             storage_path('app/firebase/service-account.json'),
+            '/etc/secrets/service-account.json',
         ];
 
         $credentialsPath = null;
