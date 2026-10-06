@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
@@ -1365,5 +1366,203 @@ class AuthController extends Controller
 
         $rank = ['Safe' => 0, 'Warning' => 1, 'Critical' => 2];
         return $rank[$ttdStatus] > $rank[$currentStatus] ? $ttdStatus : $currentStatus;
+    }
+
+    public function getTankReports(Request $request, $tankId)
+    {
+        try {
+            $token = $request->bearerToken();
+            if (!$token) {
+                return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
+            }
+            $parts = explode('|', base64_decode($token));
+            $userId = $parts[0] ?? null;
+
+            $tank = DB::table('tanks')
+                ->join('dashboard', 'tanks.TankID', '=', 'dashboard.TankID')
+                ->where('tanks.TankID', $tankId)
+                ->where('dashboard.UserID', $userId)
+                ->select('tanks.TankID', 'tanks.Tankname')
+                ->first();
+            
+            if (!$tank) {
+                return response()->json(['success' => false, 'message' => 'Tank not found'], 404);
+            }
+
+            $range = $request->query('range', '7d');
+            $since = match ($range) {
+                '14d' => now()->subDays(14),
+                '30d' => now()->subDays(30),
+                default => now()->subDays(7),
+            };
+
+            $readings = DB::table('sensor_data')
+                ->where('tank_id', $tankId)
+                ->where('timestamp', '>=', $since)
+                ->orderBy('timestamp')
+                ->limit(200)
+                ->get()
+                ->map(function ($row) {
+                    return [
+                        'timestamp' => $row->timestamp,
+                        'temperature' => round((float) $row->temperature, 2),
+                        'ph' => round((float) $row->ph_level, 2),
+                        'turbidity' => round((float) $row->turbidity, 2)
+                    ];
+                });
+
+            $summary = null;
+            if ($readings->isNotEmpty()) {
+                $temps = $readings->pluck('temperature');
+                $phs = $readings->pluck('ph');
+                $turbs = $readings->pluck('turbidity');
+                $summary = [
+                    'temperature' => [
+                        'min' => round($temps->min(), 2),
+                        'avg' => round($temps->avg(), 2),
+                        'max' => round($temps->max(), 2),
+                    ],
+                    'ph' => [
+                        'min' => round($phs->min(), 2),
+                        'avg' => round($phs->avg(), 2),
+                        'max' => round($phs->max(), 2),
+                    ],
+                    'turbidity' => [
+                        'min' => round($turbs->min(), 2),
+                        'avg' => round($turbs->avg(), 2),
+                        'max' => round($turbs->max(), 2),
+                    ],
+                    'reading_count' => $readings->count(),
+                ];
+            }
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'tank' => $tank,
+                    'range' => $range,
+                    'readings' => $readings,
+                    'summary' => $summary,
+                ],
+                'message' => 'Reports loaded'
+            ]);
+        } catch (\Exception $e) {
+            Log::error('GetTankReports', ['message' => $e->getMessage()]);
+            return response()->json(['success' => false, 'message' => 'Server error'], 500);
+        }
+    }
+
+    public function downloadReportPdf(Request $request, $tankId)
+    {
+        try {
+            $token = $request->bearerToken();
+            if (!$token) {
+                return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
+            }
+            $parts = explode('|', base64_decode($token));
+            $userId = $parts[0] ?? null;
+
+            $tank = DB::table('tanks')
+                ->join('dashboard', 'tanks.TankID', '=', 'dashboard.TankID')
+                ->where('tanks.TankID', $tankId)
+                ->where('dashboard.UserID', $userId)
+                ->select('tanks.TankID', 'tanks.Tankname')
+                ->first();
+
+            if (!$tank) {
+                return response()->json(['success' => false, 'message' => 'Tank not found'], 404);
+            }
+
+            $range = $request->query('range', '7d');
+            $since = match ($range) {
+                '14d' => now()->subDays(14),
+                '30d' => now()->subDays(30),
+                default => now()->subDays(7),
+            };
+
+            $readings = DB::table('sensor_data')
+                ->where('tank_id', $tankId)
+                ->where('timestamp', '>=', $since)
+                ->orderBy('timestamp')
+                ->limit(200)
+                ->get()
+                ->map(fn($row) => [
+                    'timestamp' => $row->timestamp,
+                    'temperature' => round((float) $row->temperature, 2),
+                    'ph' => round((float) $row->ph_level, 2),
+                    'turbidity' => round((float) $row->turbidity, 2),
+                ])
+                ->values()
+                ->all();
+
+            if (empty($readings)) {
+                return response()->json(['success' => false, 'message' => 'No data for this period'], 404);
+            }
+
+            $temps = array_column($readings, 'temperature');
+            $phs = array_column($readings, 'ph');
+            $turbs = array_column($readings, 'turbidity');
+
+            $summary = [
+                'temperature' => ['min' => min($temps), 'avg' => round(array_sum($temps) / count($temps), 2), 'max' => max($temps)],
+                'ph' => ['min' => min($phs), 'avg' => round(array_sum($phs) / count($phs), 2), 'max' => max($phs)],
+                'turbidity' => ['min' => min($turbs), 'avg' => round(array_sum($turbs) / count($turbs), 2), 'max' => max($turbs)],
+            ];
+
+            $labels = array_map(fn($r) => substr($r['timestamp'], 5, 11), $readings);
+
+            $chartTempUrl = $this->quickChartUrl('Temperature (°C)', $labels, $temps, '#D32F2F');
+            $chartPhUrl = $this->quickChartUrl('pH Level',        $labels, $phs,   '#0066CC');
+            $chartTurbUrl = $this->quickChartUrl('Turbidity (NTU)', $labels, $turbs, '#F57C00');
+
+            $periodLabel = match ($range) {
+                '14d' => 'Last 14 days',
+                '30d' => 'Last 30 days',
+                default => 'Last 7 days',
+            };
+
+            $pdf = Pdf::loadView('reports.pdf', [
+                'tankName' => $tank->Tankname,
+                'periodLabel' => $periodLabel,
+                'generatedAt' => now()->format('M d, Y \a\t H:i'),
+                'readingCount' => count($readings),
+                'readings' => $readings,
+                'summary' => $summary,
+                'chartTempUrl' => $chartTempUrl,
+                'chartPhUrl' => $chartPhUrl,
+                'chartTurbUrl' => $chartTurbUrl,
+            ])->setOption('isRemoteEnabled', true);
+
+            return $pdf->download("craysafe_report_tank{$tankId}.pdf");
+        } catch (\Exception $e) {
+            Log::error('DownloadReportPdf', ['message' => $e->getMessage()]);
+            return response()->json(['success' => false, 'message' => 'Server error'], 500);
+        }
+    }
+
+    private function quickChartUrl($label, $labels, $values, $color)
+    {
+        $config = [
+            'type' => 'line',
+            'data' => [
+                'labels' => $labels,
+                'datasets' => [[
+                    'label' => $label,
+                    'data' => $values,
+                    'borderColor' => $color,
+                    'backgroundColor' => $color,
+                    'fill' => false,
+                    'pointRadius' => 2,
+                    'borderWidth' => 2,
+                ]],
+            ],
+            'options' => [
+                'legend' => ['display' => false],
+                'scales' => ['y' => ['beginAtZero' => false]],
+            ],
+        ];
+
+        $encoded = urlencode(json_encode($config));
+        return "https://quickchart.io/chart?w=600&h=250&c={$encoded}";
     }
 }
