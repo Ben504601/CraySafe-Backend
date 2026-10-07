@@ -1533,7 +1533,17 @@ class AuthController extends Controller
                 'chartTurbUrl' => $chartTurbUrl,
             ])->setOption('isRemoteEnabled', true);
 
-            return $pdf->download("craysafe_report_tank{$tankId}.pdf");
+            $filename = "craysafe_report_tank{$tankId}.pdf";
+            $pdfOutput = $pdf->output();
+
+            return response($pdfOutput, 200, [
+                'Content-Type' => 'application/pdf',
+                'Content-Disposition' => 'attachment; filename="' . $filename . '"',
+                'Content-Length' => strlen($pdfOutput),
+                'Cache-Control' => 'no-cache, no-store, must-revalidate',
+                'Pragma' => 'no-cache',
+                'Expires' => '0',
+            ]);
         } catch (\Exception $e) {
             Log::error('DownloadReportPdf', ['message' => $e->getMessage()]);
             return response()->json(['success' => false, 'message' => 'Server error'], 500);
