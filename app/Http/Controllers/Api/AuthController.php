@@ -715,7 +715,40 @@ class AuthController extends Controller
                     'tanks.Tankname as tank_name'
                 )
                 ->limit(50)
-                ->get();
+                ->get()
+                ->map(function ($alert) {
+                    // Split message into headline + advice on the first blank line
+                    $parts = preg_split("/\n\s*\n/", $alert->message, 2);
+                    $headline = trim($parts[0] ?? $alert->message);
+                    $advice = trim($parts[1] ?? '');
+
+                    // Strip the emoji + "CRITICAL: Parameter is" prefix from the headline
+                    // to get just the descriptive part
+                    $headlineClean = preg_replace(
+                        '/^(🔴|🟠|🟡)\s*(CRITICAL|WARNING|PREDICTION):\s*\w+\s+is\s+/u',
+                        '',
+                        $headline
+                    );
+
+                    // Parse alert_type "Critical:Temperature" into severity + parameter
+                    $typeParts = explode(':', $alert->alert_type, 2);
+                    $severity = $typeParts[0] ?? '';
+                    $parameter = $typeParts[1] ?? '';
+
+                    return [
+                        'alert_id' => $alert->alert_id,
+                        'tank_id' => $alert->tank_id,
+                        'alert_type' => $alert->alert_type,
+                        'severity' => $severity,
+                        'parameter' => $parameter,
+                        'headline' => $headlineClean ?: $headline,
+                        'advice' => $advice,
+                        'message' => $alert->message,     // keep for compatibility
+                        'status' => $alert->status,
+                        'alert_date' => $alert->alert_date,
+                        'tank_name' => $alert->tank_name,
+                    ];
+                });
             
             $unreadCount = $alerts->where('status', 'unread')->count();
 
