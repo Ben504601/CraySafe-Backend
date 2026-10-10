@@ -18,7 +18,11 @@ class AuthController extends Controller
     {
         $request->validate([
             'email' => 'required|email',
-            'password' => 'required|min:6'
+            'password' => 'required|string'
+        ], [
+            'email.required' => 'Email is required.',
+            'email.email' => 'Please enter a valid email address.',
+            'password.required' => 'Password is required.',
         ]);
 
         // Find user in your custom users table
@@ -56,9 +60,26 @@ class AuthController extends Controller
         $request->validate([
             'username' => 'required|string|max:50|unique:users,username',
             'email' => 'required|email|max:100|unique:users,email',
-            'password' => 'required|min:6',
+            'password' => [
+                'required',
+                'string',
+                'min:8',
+                'regex:/[a-z]/',
+                'regex:/[A-Z]/',
+                'regex:/[0-9]/',
+                'not_in:password,12345678,password123',
+            ],
             'confirm_password' => 'required|same:password',
             'product_id' => 'required|string|exists:purchases,purchase_id'
+        ], [
+            'password.required' => 'Password is required.',
+            'password.min' => 'Password must be at least 8 characters.',
+            'password.regex' => 'Password must contain at least one uppercase letter, one lowercase letter, and one number',
+            'password.mot_in' => 'That password is too common. Please choose a stronger one.',
+            'confirm_password.same' => 'Passwords do not match.',
+            'email.unique' => 'That email is already registered.',
+            'username.unique' => 'That username is already taken.',
+            'product_id.exists' => 'That Product ID is not valid.',
         ]);
 
         $productId = $request->product_id;
