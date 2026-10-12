@@ -1433,9 +1433,9 @@ class AuthController extends Controller
 
             $range = $request->query('range', '7d');
             $since = match ($range) {
-                '14d' => now()->subDays(14),
-                '30d' => now()->subDays(30),
-                default => now()->subDays(7),
+                '14d' => now()->subDays(14)->startOfDay(),
+                '30d' => now()->subDays(30)->startOfDay(),
+                default => now()->subDays(7)->startOfDay(),
             };
 
             $readings = DB::table('sensor_data')
