@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Http\Responses\ApiResponse;
 use App\Http\Controllers\Controller;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\Request;
@@ -14,6 +15,8 @@ use Kreait\Firebase\Messaging\Notification as FirebaseNotification;
 
 class AuthController extends Controller
 {
+    use ApiResponse;
+
     public function login(Request $request)
     {
         $request->validate([
@@ -32,26 +35,25 @@ class AuthController extends Controller
 
         // Check if user exists and password matches
         if (!$user || !Hash::check($request->password, $user->password_hash)) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Invalid email or password'
-            ], 401);
+            return $this->error(
+                'Invalid email or password',
+                'INVALID_CREDENTIALS',
+                401
+            );
         }
 
         // Create a simple token (for testing)
         $token = base64_encode($user->user_id . '|' . $user->email . '|' . now());
 
-        return response()->json([
-            'success' => true,
-            'message' => 'Login successful',
+        return $this->success([
             'token' => $token,
             'user' => [
                 'id' => $user->user_id,
                 'username' => $user->username,
                 'email' => $user->email,
-                'role' => $user->role
-            ]
-        ]);
+                'role' => $user->role,
+            ],
+        ], 'Login successful');
     }
 
     public function register(Request $request)
@@ -90,17 +92,15 @@ class AuthController extends Controller
             ->first();
         
         if (!$purchase) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Invalid Product ID'
-            ], 404);
+            return $this->notFound('Invalid Product ID');
         }
 
         if ($purchase->is_activated == 1) {
-            return response()->json([
-                'success' => false,
-                'message' => 'This Product ID has aleardy been used to register an account'
-            ], 409);
+            return $this->error(
+                'This Product ID has already been used to register an account',
+                'PRODUCT_ID_USED',
+                409
+            );
         }
 
         // Check if ProductID is already linked to a tank (redundance check)
@@ -109,10 +109,11 @@ class AuthController extends Controller
             ->first();
 
         if ($existingTank) {
-            return response()->json([
-                'success' => false,
-                'message' => 'This Product ID is already linked to a tank'
-            ], 409);
+            return $this->error(
+                'This Product ID is already linked to a tank',
+                'PRODUCT_ID_LINKED',
+                409
+            );
         }
 
         // Insert new user
@@ -151,30 +152,32 @@ class AuthController extends Controller
         // Create token
         $token = base64_encode($user->user_id . '|' . $user->email . '|' . now());
 
-        return response()->json([
-            'success' => true,
-            'message' => 'Registration successful! Your tank has been set up.',
+        return $this->success([
             'token' => $token,
             'user' => [
                 'id' => $user->user_id,
                 'username' => $user->username,
                 'email' => $user->email,
-                'role' => $user->role
-            ]
-        ], 201);
+                'role' => $user->role,
+            ],
+        ], 'Registration successful! Your tank has been set up.', 201);
     }
     
     public function dashboard(Request $request)
     {
         $token = $request->bearerToken();
         if (!$token) {
-            return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
+            return $this->unauthorized();
         }
 
         $parts = explode('|', base64_decode($token));
         $userId = $parts[0] ?? null;
         if (!$userId) {
-            return response()->json(['success' => false, 'message' => 'Invalid Token'], 401);
+            return $this->error(
+                'Invalid token',
+                'INVALID_TOKEN',
+                401
+            );
         }
 
         // Get all tanks for this user
@@ -215,11 +218,7 @@ class AuthController extends Controller
             ];
         });
 
-        return response()->json([
-            'success' => true,
-            'data' => $result,
-            'message' => 'Dashboard loaded'
-        ]);
+        return $this->success($result, 'Dashboard loaded');
     }
 
     // Compute status based on the mode's thresholds.
@@ -293,7 +292,7 @@ class AuthController extends Controller
         try {
             $token = $request->bearerToken();
             if (!$token) {
-                return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
+                return $this->unauthorized();
             }
             $parts = explode('|', base64_decode($token));
             $userId = $parts[0] ?? null;
@@ -311,7 +310,7 @@ class AuthController extends Controller
                 ->first();
 
             if (!$tank) {
-                return response()->json(['success' => false, 'message' => 'Tank not found'], 404);
+                return $this->notFound('Tank not found');
             }
 
             // Latest reading from sensor_data
@@ -322,27 +321,26 @@ class AuthController extends Controller
 
             $ttd = $this->computeAllTTD($tankId, $tank->Mode ?? 'Growing');
 
-            return response()->json([
-                'success' => true,
-                'data' => [
-                    'TankID' => $tank->TankID,
-                    'Tankname' => $tank->Tankname,
-                    'Mode' => $tank->Mode ?? 'Growing',
-                    'Temperature' => $latest->temperature ?? null,
-                    'Ph_Level' => $latest->ph_level ?? null,
-                    'Turbidity' => $latest->turbidity ?? null,
-                    'Status' => $latest
-                        ? $this->computeOverallStatus($latest, $tank->Mode ?? 'Growing', $ttd)
-                        : 'Unknown',
-                    'LastUpdated' => $latest->timestamp ?? null,
-                    'TemperatureTTD' => $ttd['temperature'] ? $ttd['temperature']['minutes'] : null,
-                    'PhTTD' => $ttd['ph'] ? $ttd['ph']['minutes'] : null,
-                    'TurbidityTTD' => $ttd['turbidity'] ? $ttd['turbidity']['minutes'] : null
-                ]
-            ]);
+            return $this->success([
+                'TankID' => $tank->TankID,
+                'Tankname' => $tank->Tankname,
+                'Mode' => $tank->Mode ?? 'Growing',
+                'Temperature' => $latest->temperature ?? null,
+                'Ph_Level' => $latest->ph_level ?? null,
+                'Turbidity' => $latest->turbidity ?? null,
+                'Status' => $latest
+                    ? $this->computeOverallStatus($latest, $tank->Mode ?? 'Growing', $ttd)
+                    : 'Unknown',
+                'LastUpdated' => $latest->timestamp ?? null,
+                'TemperatureTTD' => $ttd['temperature'] ? $ttd['temperature']['minutes'] : null,
+                'PhTTD' => $ttd['ph'] ? $ttd['ph']['minutes'] : null,
+                'TurbidityTTD' => $ttd['turbidity'] ? $ttd['turbidity']['minutes'] : null,
+                ],
+                'Tank detail loaded'
+            );
         } catch (\Exception $e) {
             Log::error('TankDetail error', ['message' => $e->getMessage()]);
-            return response()->json(['success' => false, 'message' => 'Server error'], 500);
+            return $this->serverError();
         }
     }
 
@@ -351,12 +349,16 @@ class AuthController extends Controller
         try {
             $token = $request->bearerToken();
             if (!$token) {
-                return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
+                return $this->unauthorized();
             }
             $parts = explode('|', base64_decode($token));
             $userId = $parts[0] ?? null;
             if (!$userId) {
-                return response()->json(['success' => false, 'message' => 'Invalid token'], 401);
+                return $this->error(
+                    'Invalid token',
+                    'INVALID_TOKEN',
+                    401
+                );
             }
 
             $request->validate([
@@ -371,10 +373,7 @@ class AuthController extends Controller
                 ->first();
 
             if (!$tank) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Tank not found or unauthorized'
-                ], 404);
+                return $this->notFound('Tank not found');
             }
 
             DB::table('dashboard')
@@ -382,14 +381,14 @@ class AuthController extends Controller
                 ->where('UserID', $userId)
                 ->update(['Mode' => $newMode]);
 
-            return response()->json([
-                'success' => true,
-                'message' => "Switched to $newMode mode",
-                'new_mode' => $newMode
-            ]);
+            return $this->success(
+                ['mode' => $newMode],
+                "Switched to {$newMode} mode"
+            );
+            
         } catch (\Exception $e) {
             Log::error('SwitchMode error', ['message' => $e->getMessage()]);
-            return response()->json(['success' => false, 'message' => 'Server error'], 500);
+            return $this->serverError();
         }
     }
 
@@ -414,17 +413,15 @@ class AuthController extends Controller
             Log::info('Purchase found', ['purchase' => $purchase]);
 
             if (!$purchase) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Invalid Product ID'
-                ], 404);
+                return $this->notFound('Product ID not found');
             }
 
             if ($purchase->is_activated == 1) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'This Product ID has already been paired'
-                ], 409);
+                return $this->error(
+                    'This Product ID has already been paired',
+                    'CONFLICT_CODE',
+                    409
+                );
             }
 
             // Get the authenticated user (from token)
@@ -432,10 +429,7 @@ class AuthController extends Controller
             Log::info('Token received', ['token' => $token]);
 
             if (!$token) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Token missing'
-                ], 401);
+                return $this->unauthorized();
             }
 
             $parts = explode('|', base64_decode($token));
@@ -443,10 +437,7 @@ class AuthController extends Controller
             Log::info('User ID extracted', ['user_id' => $userId]);
 
             if (!$userId) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Unauthorized'
-                ], 401);
+                return $this->unauthorized();
             }
 
             // Check if this ProductID is already linked to a tank
@@ -455,10 +446,11 @@ class AuthController extends Controller
                 ->first();
 
             if ($existingTank) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'This Product ID is already linked to a tank'
-                ], 409);
+                return $this->error(
+                    'This Product ID is already linked to a tank',
+                    'CONFLICT_CODE',
+                    409
+                );
             }
 
             // Create a new tank
@@ -491,15 +483,15 @@ class AuthController extends Controller
 
             Log::info('Purchase activated');
 
-            return response()->json([
-                'success' => true,
-                'message' => 'Tank paired successfully!',
-                'tank' => [
-                    'TankID' => $tankId,
-                    'ProductID' => $productId,
-                    'Tankname' => 'Tank ' . $productId
-                ]
-            ], 201);
+            return $this->success([
+                'TankID' => $tankId,
+                'ProductID' => $productId,
+                'Tankname' => 'Tank ' . $productId
+                ],
+                'Tank paired successfully!',
+                201
+            );
+            
 
         } catch (\Exception $e) {
             Log::error('PairTank error', [
@@ -508,10 +500,7 @@ class AuthController extends Controller
                 'line' => $e->getLine()
             ]);
 
-            return response()->json([
-                'success' => false,
-                'message' => 'Server error: ' . $e->getMessage()
-            ], 500);
+            return $this->serverError($e->getMessage());
         }
     }
 
@@ -521,7 +510,7 @@ class AuthController extends Controller
             // 1. Verify token (same pattern)
             $token = $request->bearerToken();
             if (!$token) {
-                return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
+                return $this->unauthorized();
             }
 
             // 2. Fetch the last 21 sensor readings for this tank
@@ -534,10 +523,11 @@ class AuthController extends Controller
                 ->values();
 
             if ($readings->count() < 21) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Not enough data. Need at least 21 readings.'
-                ], 400);
+                return $this->error(
+                    'Not enough data. Need at least 21 readings.',
+                    'INSUFFICIENT_DATA',
+                    400
+                );
             }
 
             // 3. Get tank's current mode
@@ -571,15 +561,14 @@ class AuthController extends Controller
                 ),
             ];
 
-            return response()->json([
-                'success' => true,
-                'data' => $result,
-                'message' => 'Time-to-Danger computed'
-            ]);
+            return $this->success(
+                $result,
+                'Time-to-Danger computed'
+            );
 
         } catch (\Exception $e) {
             Log::error('TimeToDanger error', ['message' => $e->getMessage()]);
-            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
+            return $this->serverError($e->getMessage());
         }
     }
 
@@ -713,12 +702,16 @@ class AuthController extends Controller
         try {
             $token = $request->bearerToken();
             if (!$token) {
-                return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
+                return $this->unauthorized();
             }
             $parts = explode('|', base64_decode($token));
             $userId = $parts[0] ?? null;
             if (!$userId) {
-                return response()->json(['success' => false, 'message' => 'Invalid token'], 401);
+                return $this->error(
+                    'Invalid token',
+                    'INVALID_TOKEN',
+                    401
+                );
             }
 
             $alerts = DB::table('alerts')
@@ -773,15 +766,15 @@ class AuthController extends Controller
             
             $unreadCount = $alerts->where('status', 'unread')->count();
 
-            return response()->json([
-                'success' => true,
-                'data' => $alerts,
+            return $this->success([
+                'alerts' => $alerts,
                 'unread_count' => $unreadCount,
-                'message' => 'Alerts loaded'
-            ]);
+                ],
+                'Alerts loaded'
+            );
         } catch (\Exception $e) {
             Log::error('GetAlerts error', ['message' => $e->getMessage()]);
-            return response()->json(['success' => false, 'message' => 'Server error'], 500);
+            return $this->serverError();
         }
     }
 
@@ -790,7 +783,7 @@ class AuthController extends Controller
         try {
             $token = $request->bearerToken();
             if (!$token) {
-                return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
+                return $this->unauthorized();
             }
             $parts = explode('|', base64_decode($token));
             $userId = $parts[0] ?? null;
@@ -803,20 +796,17 @@ class AuthController extends Controller
                 ->first();
 
             if (!$alert) {
-                return response()->json(['success' => false, 'message' => 'Alert not found'], 404);
+                return $this->notFound('Alert not found');
             }
 
             DB::table('alerts')
                 ->where('alert_id', $alertId)
                 ->update(['status' => 'read']);
 
-            return response()->json([
-                'success' => true,
-                'message' => 'Alert marked as read'
-            ]);
+            return $this->success(null, 'Alert marked as read');
         } catch (\Exception $e) {
             Log::error('MarkAlertRead error', ['message' => $e->getMessage()]);
-            return response()->json(['success' => false, 'message' => 'Server error'], 500);
+            return $this->serverError();
         }
     }
 
@@ -835,10 +825,7 @@ class AuthController extends Controller
                 ->first();
 
             if (!$tank) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Product ID not paired to any tank'
-                ], 404);
+                return $this->notFound('Product ID not paired to any tank');
             }
 
             $dataId = DB::table('sensor_data')->insertGetId([
@@ -856,14 +843,13 @@ class AuthController extends Controller
 
             $this->checkAndCreateAlerts($tank->TankID, $request, $mode);
 
-            return response()->json([
-                'success' => true,
-                'message' => 'Sensor data recorded',
-                'data_id' => $dataId
-            ], 201);
+            return $this->success(
+                $dataId,
+                'Sensor data recorded'
+            );
         } catch (\Exception $e) {
             Log::error('PostSensorData error', ['message' => $e->getMessage()]);
-            return response()->json(['success' => false, 'message' => 'Server error'], 500);
+            return $this->serverError();
         }
     }
 
@@ -1228,7 +1214,7 @@ class AuthController extends Controller
             $request->validate(['fcm_token' => 'required|string']);
             $token = $request->bearerToken();
             if (!$token) {
-                return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
+                return $this->unauthorized();
             }
             $parts = explode('|', base64_decode($token));
             $userId = $parts[0] ?? null;
@@ -1237,10 +1223,10 @@ class AuthController extends Controller
                 ['fcm_token' => $request->fcm_token],
                 ['user_id' => $userId, 'updated_at' => now()]
             );
-            return response()->json(['success' => true, 'message' => 'Token saved']);
+            return $this->success(null, 'Token saved');
         } catch (\Exception $e) {
             Log::error('SaveFcmToken error', ['message' => $e->getMessage()]);
-            return response()->json(['success' => false, 'message' => 'Server error'], 500);
+            return $this->serverError();
         }
     }
 
@@ -1327,7 +1313,7 @@ class AuthController extends Controller
         try {
             $token = $request->bearerToken();
             if (!$token) {
-                return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
+                return $this->unauthorized();
             }
 
             $search = $request->query('search');
@@ -1348,14 +1334,13 @@ class AuthController extends Controller
 
             $items = $query->orderBy('category')->orderBy('issue_title')->get();
 
-            return response()->json([
-                'success' => true,
-                'data' => $items,
-                'message' => 'Q&A loaded'
-            ]);
+            return $this->success(
+                $items,
+                'Q&A loaded'
+            );
         } catch (\Exception $e) {
             Log::error('GetDiagnosticQnA error', ['message' => $e->getMessage()]);
-            return response()->json(['success' => false, 'message' => 'Server error'], 500);
+            return $this->serverError();
         }
     }
 
@@ -1364,12 +1349,16 @@ class AuthController extends Controller
         try {
             $token = $request->bearerToken();
             if (!$token) {
-                return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
+                return $this->unauthorized();
             }
             $parts = explode('|', base64_decode($token));
             $userId = $parts[0] ?? null;
             if (!$userId) {
-                return response()->json(['success' => false, 'message' => 'Invalid token'], 401);
+                return $this->error(
+                    'Invalid token',
+                    'INVALID_TOKEN',
+                    401
+                );
             }
 
             $count = DB::table('alerts')
@@ -1378,14 +1367,13 @@ class AuthController extends Controller
                 ->where('alerts.status', 'unread')
                 ->count();
 
-            return response()->json([
-                'success' => true,
-                'count' => $count,
-                'message' => 'Unread count loaded'
-            ]);
+            return $this->success(
+                ['count' => $count],
+                'Unread count loaded'
+            );
         } catch (\Exception $e) {
             Log::error('GetUnreadAlertCount error', ['message' => $e->getMessage()]);
-            return response()->json(['success' => false, 'message' => 'Server error'], 500);
+            return $this->serverError();
         }
     }
 
@@ -1427,7 +1415,7 @@ class AuthController extends Controller
         try {
             $token = $request->bearerToken();
             if (!$token) {
-                return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
+                return $this->unauthorized();
             }
             $parts = explode('|', base64_decode($token));
             $userId = $parts[0] ?? null;
@@ -1440,7 +1428,7 @@ class AuthController extends Controller
                 ->first();
             
             if (!$tank) {
-                return response()->json(['success' => false, 'message' => 'Tank not found'], 404);
+                return $this->notFound('Tank not found');
             }
 
             $range = $request->query('range', '7d');
@@ -1488,21 +1476,19 @@ class AuthController extends Controller
                     ],
                     'reading_count' => $readings->count(),
                 ];
-            }
+            };
 
-            return response()->json([
-                'success' => true,
-                'data' => [
-                    'tank' => $tank,
-                    'range' => $range,
-                    'readings' => $readings,
-                    'summary' => $summary,
+            return $this->success([
+                'tank' => $tank,
+                'range' => $range,
+                'readings' => $readings,
+                'summary' => $summary,
                 ],
-                'message' => 'Reports loaded'
-            ]);
+                'Reports loaded'
+            );
         } catch (\Exception $e) {
             Log::error('GetTankReports', ['message' => $e->getMessage()]);
-            return response()->json(['success' => false, 'message' => 'Server error'], 500);
+            return $this->serverError();
         }
     }
 
@@ -1511,7 +1497,7 @@ class AuthController extends Controller
         try {
             $token = $request->bearerToken();
             if (!$token) {
-                return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
+                return $this->unauthorized();
             }
             $parts = explode('|', base64_decode($token));
             $userId = $parts[0] ?? null;
@@ -1524,7 +1510,7 @@ class AuthController extends Controller
                 ->first();
 
             if (!$tank) {
-                return response()->json(['success' => false, 'message' => 'Tank not found'], 404);
+                return $this->notFound('Tank not found');
             }
 
             $range = $request->query('range', '7d');
@@ -1550,7 +1536,7 @@ class AuthController extends Controller
                 ->all();
 
             if (empty($readings)) {
-                return response()->json(['success' => false, 'message' => 'No data for this period'], 404);
+                return $this->notFound('No data for this period');
             }
 
             $temps = array_column($readings, 'temperature');
@@ -1600,7 +1586,7 @@ class AuthController extends Controller
             ]);
         } catch (\Exception $e) {
             Log::error('DownloadReportPdf', ['message' => $e->getMessage()]);
-            return response()->json(['success' => false, 'message' => 'Server error'], 500);
+            return $this->serverError();
         }
     }
 
