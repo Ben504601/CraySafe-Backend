@@ -4,44 +4,61 @@ use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\AuthController;
 use Illuminate\Support\Facades\DB;
 
-Route::post('/login', [AuthController::class, 'login']);
+// ═══════════════════════════════════════════════════════════════
+//  PUBLIC (unauthenticated) — tight per-IP limits
+// ═══════════════════════════════════════════════════════════════
 
-Route::post('/register', [AuthController::class, 'register']);
+Route::post('/login',    [AuthController::class, 'login'])
+    ->middleware('throttle:login');
 
-Route::get('/dashboard', [AuthController::class, 'dashboard']);
+Route::post('/register', [AuthController::class, 'register'])
+    ->middleware('throttle:register');
 
-Route::get('/tank/{id}', [AuthController::class, 'tankDetail']);
+// ═══════════════════════════════════════════════════════════════
+//  AUTHENTICATED — specific per-user limits
+// ═══════════════════════════════════════════════════════════════
 
-Route::post('/tank/{id}/mode', [AuthController::class, 'switchMode']);
+Route::post('/sensor-data', [AuthController::class, 'postSensorData'])
+    ->middleware('throttle:sensor-data');
 
-Route::get('/tank/{id}/time-to-danger', [AuthController::class, 'timeToDanger']);
+Route::post('/fcm-token', [AuthController::class, 'saveFcmToken'])
+    ->middleware('throttle:fcm-token');
 
-Route::get('/tank/{id}/reports', [AuthController::class, 'getTankReports']);
+// ═══════════════════════════════════════════════════════════════
+//  AUTHENTICATED — general per-user bucket
+// ═══════════════════════════════════════════════════════════════
 
-Route::get('/tank/{id}/reports/pdf', [AuthController::class, 'downloadReportPdf']);
-
-Route::get('/alerts', [AuthController::class, 'getAlerts']);
-
-Route::get('/alerts/unread-count', [AuthController::class, 'getUnreadAlertCount']);
-
-Route::post('/alerts/{id}/read', [AuthController::class, 'markAlertRead']);
-
-Route::post('/sensor-data', [AuthController::class, 'postSensorData']);
-
-Route::post('/fcm-token', [AuthController::class, 'saveFcmToken']);
-
-Route::get('/support/qa', [AuthController::class, 'getDiagnosticQnA']);
-
-// TEST ROUTE
-Route::get('/test', function () {
-    return response()->json([
-        'success' => true,
-        'message' => 'API is working!',
-        'time' => now()->toDateTimeString()
-    ]);
+Route::middleware('throttle:api-general')->group(function () {
+    Route::get('/dashboard',                [AuthController::class, 'dashboard']);
+    Route::get('/tank/{id}',                [AuthController::class, 'tankDetail']);
+    Route::post('/tank/{id}/mode',          [AuthController::class, 'switchMode']);
+    Route::get('/tank/{id}/time-to-danger', [AuthController::class, 'timeToDanger']);
+    Route::get('/tank/{id}/reports',        [AuthController::class, 'getTankReports']);
+    Route::get('/tank/{id}/reports/pdf',    [AuthController::class, 'downloadReportPdf']);
+    Route::get('/alerts',                   [AuthController::class, 'getAlerts']);
+    Route::get('/alerts/unread-count',      [AuthController::class, 'getUnreadAlertCount']);
+    Route::post('/alerts/{id}/read',        [AuthController::class, 'markAlertRead']);
+    Route::get('/support/qa',               [AuthController::class, 'getDiagnosticQnA']);
+    Route::post('/pair-tank',               [AuthController::class, 'pairTank']);
 });
 
-Route::get('/db-test', function() {
+// ═══════════════════════════════════════════════════════════════
+//  WAKE PING — deliberately unthrottled so the Python bridge can
+//  wake Render's free-tier cold start without a 429 in the way.
+// ═══════════════════════════════════════════════════════════════
+
+Route::get('/ping', fn () => response()->json(['message' => 'pong']));
+Route::get('/test', fn () => response()->json([
+    'success' => true,
+    'message' => 'API is working!',
+    'time' => now()->toDateTimeString(),
+]));
+
+// ═══════════════════════════════════════════════════════════════
+//  DEBUG ROUTES — ⚠️ remove or gate before public release
+// ═══════════════════════════════════════════════════════════════
+
+Route::get('/db-test', function () {
     try {
         DB::connection()->getPdo();
         return 'DB OK: ' . DB::connection()->getDatabaseName();
@@ -85,10 +102,4 @@ Route::get('/env-raw', function () {
         'DB_USERNAME' => env('DB_USERNAME'),
         'DB_PASSWORD_SET' => !empty(env('DB_PASSWORD')),
     ]);
-});
-
-Route::post('/pair-tank', [AuthController::class, 'pairTank']);
-
-Route::get('/ping', function () {
-    return response()->json(['message' => 'pong']);
 });

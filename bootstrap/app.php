@@ -22,7 +22,10 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware) {
-        // Middleware configuration
+        // Render terminates TLS at its edge and forwards via X-Forwarded-For.
+        // Without this, $request->ip() returns Render's LB IP and every user
+        // shares one rate-limit bucket.
+        $middleware->trustProxies(at: '*');
     })
     ->withExceptions(function (Exceptions $exceptions) {
 
