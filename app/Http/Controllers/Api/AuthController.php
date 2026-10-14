@@ -249,6 +249,31 @@ class AuthController extends Controller
             return 'Safe';
     }
 
+    private function paramStatus($value, string $parameter, string $mode): string
+    {
+        if ($value === null) return 'Unknown';
+
+        [$min, $max] = match ($parameter) {
+            'temperature' => $mode === 'Breeding' ? [18, 26] : [20, 28],
+            'ph' => $mode === 'Breeding' ? [6.8, 8.7] : [6.5, 8.5],
+            'turbidity' => $mode === 'Breeding' ? [0, 70] : [0, 100],
+            default => [0, 0],
+        };
+
+        if ($value <= $min || $value >= $max) return 'Critical';
+
+        $buffer = match ($parameter) {
+            'temperature' => 1.0,
+            'ph' => 0.3,
+            'turbidity' => $max * 0.3,
+            default => 0,
+        };
+
+        if ($value < $min + $buffer || $value > $max - $buffer) return 'Warning';
+
+        return 'Safe';
+    }
+
     // Compute TTD for all parameters
     public function computeAllTTD($tankId, $mode)
     {
@@ -335,6 +360,9 @@ class AuthController extends Controller
                 'TemperatureTTD' => $ttd['temperature'] ? $ttd['temperature']['minutes'] : null,
                 'PhTTD' => $ttd['ph'] ? $ttd['ph']['minutes'] : null,
                 'TurbidityTTD' => $ttd['turbidity'] ? $ttd['turbidity']['minutes'] : null,
+                'TemperatureStatus' => $latest ? $this->paramStatus($latest->temperature, 'temperature', $tank->Mode ?? 'Growing') : 'Unknown',
+                'PhStatus' => $latest ? $this->paramStatus($latest->ph_level, 'ph', $tank->Mode ?? 'Growing') : 'Unknown',
+                'TurbidityStatus' => $latest ? $this->paramStatus($latest->turbidity, 'turbidity', $tank->Mode ?? 'Growing') : 'Unknown',
                 ],
                 'Tank detail loaded'
             );
