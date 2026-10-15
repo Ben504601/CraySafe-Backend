@@ -767,7 +767,7 @@ class AuthController extends Controller
                     // Strip the emoji + "CRITICAL: Parameter is" prefix from the headline
                     // to get just the descriptive part
                     $headlineClean = preg_replace(
-                        '/^(🔴|🟠|🟡)\s*(CRITICAL|WARNING|PREDICTION):\s*\w+\s+is\s+/u',
+                        '/^(🔴|🟠|🟡)\s*(CRITICAL|WARNING|PREDICTION):\s*\w+\s+(?:is|will\s+reach)\s*/u',
                         '',
                         $headline
                     );
