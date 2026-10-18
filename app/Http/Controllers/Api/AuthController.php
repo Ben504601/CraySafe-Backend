@@ -725,7 +725,7 @@ class AuthController extends Controller
         return $x;
     }
 
-    public function getAlerts(Request $request)
+        public function getAlerts(Request $request)
     {
         try {
             $token = $request->bearerToken();
@@ -735,18 +735,33 @@ class AuthController extends Controller
             $parts = explode('|', base64_decode($token));
             $userId = $parts[0] ?? null;
             if (!$userId) {
-                return $this->error(
-                    'Invalid token',
-                    'INVALID_TOKEN',
-                    401
-                );
+                return $this->error('Invalid token', 'INVALID_TOKEN', 401);
             }
 
-            $alerts = DB::table('alerts')
+            // 1. Pagination & Filter params
+            $page = (int) $request->query('page', 1);
+            $perPage = (int) $request->query('per_page', 20);
+            $filter = $request->query('filter', 'all'); // 'all' or 'unread'
+
+            // 2. Build base query
+            $query = DB::table('alerts')
                 ->join('dashboard', 'alerts.tank_id', '=', 'dashboard.TankID')
                 ->join('tanks', 'alerts.tank_id', '=', 'tanks.TankID')
-                ->where('dashboard.UserID', $userId)
-                ->orderBy('alerts.alert_date', 'desc')
+                ->where('dashboard.UserID', $userId);
+
+            // 3. Apply filter
+            if ($filter === 'unread') {
+                $query->where('alerts.status', 'unread');
+            }
+
+            // 4. Get total for pagination
+            $total = $query->count();
+            $lastPage = max(1, ceil($total / $perPage));
+
+            // 5. Fetch paginated results
+            $alerts = $query->orderBy('alerts.alert_date', 'desc')
+                ->skip(($page - 1) * $perPage)
+                ->take($perPage)
                 ->select(
                     'alerts.alert_id',
                     'alerts.tank_id',
@@ -756,23 +771,18 @@ class AuthController extends Controller
                     'alerts.alert_date',
                     'tanks.Tankname as tank_name'
                 )
-                ->limit(50)
                 ->get()
                 ->map(function ($alert) {
-                    // Split message into headline + advice on the first blank line
                     $parts = preg_split("/\n\s*\n/", $alert->message, 2);
                     $headline = trim($parts[0] ?? $alert->message);
                     $advice = trim($parts[1] ?? '');
 
-                    // Strip the emoji + "CRITICAL: Parameter is" prefix from the headline
-                    // to get just the descriptive part
                     $headlineClean = preg_replace(
                         '/^(🔴|🟠|🟡)\s*(CRITICAL|WARNING|PREDICTION):\s*\w+\s+(?:is|will\s+reach)\s*/u',
                         '',
                         $headline
                     );
 
-                    // Parse alert_type "Critical:Temperature" into severity + parameter
                     $typeParts = explode(':', $alert->alert_type, 2);
                     $severity = $typeParts[0] ?? '';
                     $parameter = $typeParts[1] ?? '';
@@ -785,21 +795,32 @@ class AuthController extends Controller
                         'parameter' => $parameter,
                         'headline' => $headlineClean ?: $headline,
                         'advice' => $advice,
-                        'message' => $alert->message,     // keep for compatibility
+                        'message' => $alert->message,
                         'status' => $alert->status,
                         'alert_date' => $alert->alert_date,
                         'tank_name' => $alert->tank_name,
                     ];
                 });
             
-            $unreadCount = $alerts->where('status', 'unread')->count();
+            // 6. Get total unread count for the badge (independent of current filter)
+            $unreadCount = DB::table('alerts')
+                ->join('dashboard', 'alerts.tank_id', '=', 'dashboard.TankID')
+                ->where('dashboard.UserID', $userId)
+                ->where('alerts.status', 'unread')
+                ->count();
 
             return $this->success([
-                'alerts' => $alerts,
+                'data' => $alerts,
                 'unread_count' => $unreadCount,
-                ],
-                'Alerts loaded'
-            );
+                'pagination' => [
+                    'current_page' => $page,
+                    'last_page' => $lastPage,
+                    'per_page' => $perPage,
+                    'total' => $total,
+                    'has_more' => $page < $lastPage
+                ]
+            ], 'Alerts loaded');
+            
         } catch (\Exception $e) {
             Log::error('GetAlerts error', ['message' => $e->getMessage()]);
             return $this->serverError();
