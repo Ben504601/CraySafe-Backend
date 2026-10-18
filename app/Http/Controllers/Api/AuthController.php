@@ -810,7 +810,7 @@ class AuthController extends Controller
                 ->count();
 
             return $this->success([
-                'data' => $alerts,
+                'alerts' => $alerts,
                 'unread_count' => $unreadCount,
                 'pagination' => [
                     'current_page' => $page,
