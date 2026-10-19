@@ -1364,6 +1364,8 @@ class AuthController extends Controller
             if (!$token) {
                 return $this->unauthorized();
             }
+            $parts = explode('|', base64_decode($token));
+            $userId = $parts[0] ?? null; // Extract user ID
 
             $search = $request->query('search');
             $category = $request->query('category');
@@ -1371,7 +1373,9 @@ class AuthController extends Controller
             $query = DB::table('qa_diagnostics')
                 ->select('qa_diagnostics.*')
                 ->selectRaw('(SELECT COUNT(*) FROM qa_feedback WHERE qa_id = qa_diagnostics.qa_id AND is_helpful = 1) as helpful_count')
-                ->selectRaw('(SELECT COUNT(*) FROM qa_feedback WHERE qa_id = qa_diagnostics.qa_id AND is_helpful = 0) as unhelpful_count');
+                ->selectRaw('(SELECT COUNT(*) FROM qa_feedback WHERE qa_id = qa_diagnostics.qa_id AND is_helpful = 0) as unhelpful_count')
+                // Fetch the current user's vote (returns 1, 0, or null)
+                ->selectRaw('(SELECT is_helpful FROM qa_feedback WHERE qa_id = qa_diagnostics.qa_id AND user_id = ?) as user_vote', [$userId]);
 
             if ($search) {
                 $query->where(function ($q) use ($search) {
@@ -1386,10 +1390,7 @@ class AuthController extends Controller
 
             $items = $query->orderBy('category')->orderBy('issue_title')->get();
 
-            return $this->success(
-                $items,
-                'Q&A loaded'
-            );
+            return $this->success($items, 'Q&A loaded');
         } catch (\Exception $e) {
             Log::error('GetDiagnosticQnA error', ['message' => $e->getMessage()]);
             return $this->serverError();
@@ -1409,23 +1410,33 @@ class AuthController extends Controller
                 return $this->error('Invalid token', 'INVALID_TOKEN', 401);
             }
 
-            // 1. Explicitly cast the string "true" or "false" to a boolean integer (1 or 0)
             $isHelpful = filter_var($request->is_helpful, FILTER_VALIDATE_BOOLEAN) ? 1 : 0;
 
-            // 2. Update or insert the feedback
-            DB::table('qa_feedback')->updateOrInsert(
-                ['qa_id' => $qaId, 'user_id' => $userId],
-                ['is_helpful' => $isHelpful, 'created_at' => now()]
-            );
+            $existing = DB::table('qa_feedback')
+                ->where('qa_id', $qaId)
+                ->where('user_id', $userId)
+                ->first();
+
+            if ($existing) {
+                if ($existing->is_helpful == $isHelpful) {
+                    // Clicked the same vote again -> REMOVE the vote
+                    DB::table('qa_feedback')->where('id', $existing->id)->delete();
+                } else {
+                    // Clicked the opposite vote -> SWITCH the vote
+                    DB::table('qa_feedback')->where('id', $existing->id)->update(['is_helpful' => $isHelpful]);
+                }
+            } else {
+                // First time voting -> INSERT
+                DB::table('qa_feedback')->insert([
+                    'qa_id' => $qaId,
+                    'user_id' => $userId,
+                    'is_helpful' => $isHelpful
+                ]);
+            }
 
             return $this->success(null, 'Feedback recorded');
         } catch (\Exception $e) {
-            Log::error('PostQaFeedback error', [
-                'message' => $e->getMessage(),
-                'qa_id' => $qaId,
-                'user_id' => $userId ?? null,
-                'is_helpful_raw' => $request->is_helpful
-            ]);
+            Log::error('PostQaFeedback error', ['message' => $e->getMessage()]);
             return $this->serverError();
         }
     }
