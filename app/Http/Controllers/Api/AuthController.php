@@ -1368,7 +1368,10 @@ class AuthController extends Controller
             $search = $request->query('search');
             $category = $request->query('category');
 
-            $query = DB::table('qa_diagnostics');
+            $query = DB::table('qa_diagnostics')
+                ->select('qa_diagnostics.*')
+                ->selectRaw('(SELECT COUNT(*) FROM qa_feedback WHERE qa_id = qa_diagnostics.qa_id AND is_helpful = 1) as helpful_count')
+                ->selectRaw('(SELECT COUNT(*) FROM qa_feedback WHERE qa_id = qa_diagnostics.qa_id AND is_helpful = 0) as unhelpful_count');
 
             if ($search) {
                 $query->where(function ($q) use ($search) {
@@ -1389,6 +1392,36 @@ class AuthController extends Controller
             );
         } catch (\Exception $e) {
             Log::error('GetDiagnosticQnA error', ['message' => $e->getMessage()]);
+            return $this->serverError();
+        }
+    }
+
+    public function postQaFeedback(Request $request, $qaId)
+    {
+        try {
+            $token = $request->bearerToken();
+            if (!$token) {
+                return $this->unauthorized();
+            }
+            $parts = explode('|', base64_decode($token));
+            $userId = $parts[0] ?? null;
+            if (!$userId) {
+                return $this->error('Invalid token', 'INVALID_TOKEN', 401);
+            }
+
+            $request->validate([
+                'is_helpful' => 'required|boolean'
+            ]);
+
+            // updateOrInsert prevents duplicate votes if the user clicks twice
+            DB::table('qa_feedback')->updateOrInsert(
+                ['qa_id' => $qaId, 'user_id' => $userId],
+                ['is_helpful' => $request->is_helpful, 'created_at' => now()]
+            );
+
+            return $this->success(null, 'Feedback recorded');
+        } catch (\Exception $e) {
+            Log::error('PostQaFeedback error', ['message' => $e->getMessage()]);
             return $this->serverError();
         }
     }

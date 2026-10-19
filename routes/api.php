@@ -39,6 +39,7 @@ Route::middleware('throttle:api-general')->group(function () {
     Route::get('/alerts/unread-count',      [AuthController::class, 'getUnreadAlertCount']);
     Route::post('/alerts/{id}/read',        [AuthController::class, 'markAlertRead']);
     Route::get('/support/qa',               [AuthController::class, 'getDiagnosticQnA']);
+    Route::post('/support/qa/{id}/feedback',[AuthController::class, 'postQaFeedback']);
     Route::post('/pair-tank',               [AuthController::class, 'pairTank']);
 });
 
