@@ -1409,19 +1409,23 @@ class AuthController extends Controller
                 return $this->error('Invalid token', 'INVALID_TOKEN', 401);
             }
 
-            $request->validate([
-                'is_helpful' => 'required|boolean'
-            ]);
+            // 1. Explicitly cast the string "true" or "false" to a boolean integer (1 or 0)
+            $isHelpful = filter_var($request->is_helpful, FILTER_VALIDATE_BOOLEAN) ? 1 : 0;
 
-            // updateOrInsert prevents duplicate votes if the user clicks twice
+            // 2. Update or insert the feedback
             DB::table('qa_feedback')->updateOrInsert(
                 ['qa_id' => $qaId, 'user_id' => $userId],
-                ['is_helpful' => $request->is_helpful, 'created_at' => now()]
+                ['is_helpful' => $isHelpful, 'created_at' => now()]
             );
 
             return $this->success(null, 'Feedback recorded');
         } catch (\Exception $e) {
-            Log::error('PostQaFeedback error', ['message' => $e->getMessage()]);
+            Log::error('PostQaFeedback error', [
+                'message' => $e->getMessage(),
+                'qa_id' => $qaId,
+                'user_id' => $userId ?? null,
+                'is_helpful_raw' => $request->is_helpful
+            ]);
             return $this->serverError();
         }
     }
