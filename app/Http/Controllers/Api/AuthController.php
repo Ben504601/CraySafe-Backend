@@ -1388,7 +1388,10 @@ class AuthController extends Controller
                 $query->where('category', $category);
             }
 
-            $items = $query->orderBy('category')->orderBy('issue_title')->get();
+            $items = $query->orderByRaw('(helpful_count - unhelpful_count) DESC')
+                            ->orderByDesc('helpful_count')
+                            ->orderBy('issue_title')
+                            ->get();
 
             return $this->success($items, 'Q&A loaded');
         } catch (\Exception $e) {
