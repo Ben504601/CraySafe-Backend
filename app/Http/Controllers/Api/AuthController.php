@@ -1715,4 +1715,42 @@ class AuthController extends Controller
         $encoded = urlencode(json_encode($config));
         return "https://quickchart.io/chart?w=600&h=250&c={$encoded}";
     }
+
+    public function renameTank(Request $request, $tankId)
+    {
+        try {
+            $token = $request->bearerToken();
+            if (!$token) {
+                return $this->unauthorized();
+            }
+            $parts = explode('|', base64_decode($token));
+            $userId = $parts[0] ?? null;
+            if (!$userId) {
+                return $this->error('Invalid token', 'INVALID_TOKEN', 401);
+            }
+
+            $request->validate([
+                'name' => 'required|string|max:100'
+            ]);
+
+            // Verify ownership via the dashboard table
+            $tank = DB::table('dashboard')
+                ->where('TankID', $tankId)
+                ->where('UserID', $userId)
+                ->first();
+
+            if (!$tank) {
+                return $this->notFound('Tank not found');
+            }
+
+            DB::table('tanks')
+                ->where('TankID', $tankId)
+                ->update(['Tankname' => $request->name]);
+
+            return $this->success(['Tankname' => $request->name], 'Tank renamed successfully');
+        } catch (\Exception $e) {
+            Log::error('RenameTank error', ['message' => $e->getMessage()]);
+            return $this->serverError();
+        }
+    }
 }
