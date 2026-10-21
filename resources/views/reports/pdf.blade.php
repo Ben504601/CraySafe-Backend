@@ -53,6 +53,19 @@
     Max {{ $summary['turbidity']['max'] }}
 </div>
 
+<!-- Executive Summary Box -->
+<div style="background-color: #f8f9fa; border: 1px solid #ddd; border-left: 6px solid {{ $statusColor }}; padding: 15px; margin-bottom: 20px; border-radius: 4px;">
+    <h3 style="margin-top: 0; color: #333; font-size: 16px;">Overall Status: <span style="color: {{ $statusColor }};">{{ strtoupper($overallStatus) }}</span></h3>
+    <p style="margin-bottom: 10px; font-size: 13px; color: #555;">
+        Based on {{ $readingCount }} readings over the last 7 days for your <strong>{{ $mode }}</strong> tank, here is what happened:
+    </p>
+    <ul style="margin: 0; padding-left: 20px; font-size: 13px; color: #333; line-height: 1.6;">
+        @foreach($insights as $insight)
+            <li>{{ $insight }}</li>
+        @endforeach
+    </ul>
+</div>
+
 <h2>Temperature Trend</h2>
 <img class="chart" src="{{ $chartTempUrl }}" alt="Temperature Chart">
 

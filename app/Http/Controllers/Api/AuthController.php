@@ -1661,6 +1661,59 @@ class AuthController extends Controller
                 default => 'Last 7 days',
             };
 
+                        // ─── Generate Plain-English Summary ───
+            $mode = DB::table('dashboard')->where('TankID', $tankId)->value('Mode') ?? 'Growing';
+            $isBreeding = $mode === 'Breeding';
+            
+            $tempSafe = $isBreeding ? [18, 26] : [20, 28];
+            $phSafe = $isBreeding ? [6.8, 8.7] : [6.5, 8.5];
+            $turbSafe = $isBreeding ? [0, 70] : [0, 100];
+
+            $insights = [];
+            $overallStatus = 'Safe';
+            $statusColor = '#2E7D32'; // Green
+
+            // 1. Temperature Check
+            $tempAvg = array_sum($temps) / count($temps);
+            if ($tempAvg > $tempSafe[1]) {
+                $insights[] = "Temperature was consistently TOO HIGH (avg " . round($tempAvg, 1) . "°C). This causes severe stress. Please add a fan or float ice.";
+                $overallStatus = 'Warning'; $statusColor = '#F57C00'; // Orange
+            } elseif ($tempAvg < $tempSafe[0]) {
+                $insights[] = "Temperature was TOO LOW (avg " . round($tempAvg, 1) . "°C). Growth will slow down. Ensure a heater is running.";
+                $overallStatus = 'Warning'; $statusColor = '#F57C00';
+            } else {
+                $insights[] = "Temperature was ideal, averaging " . round($tempAvg, 1) . "°C.";
+            }
+
+            // 2. pH Check
+            $phAvg = array_sum($phs) / count($phs);
+            if ($phAvg > $phSafe[1]) {
+                $insights[] = "pH was too alkaline (avg " . round($phAvg, 2) . "). The water is too hard. Consider a partial water change or adding driftwood.";
+                $overallStatus = 'Warning'; $statusColor = '#F57C00';
+            } elseif ($phAvg < $phSafe[0]) {
+                $insights[] = "pH was too acidic (avg " . round($phAvg, 2) . "). This can burn their gills. Add crushed coral to the filter.";
+                $overallStatus = 'Warning'; $statusColor = '#F57C00';
+            } else {
+                $insights[] = "pH levels were stable and safe, averaging " . round($phAvg, 2) . ".";
+            }
+
+            // 3. Turbidity Check
+            $turbAvg = array_sum($turbs) / count($turbs);
+            if ($turbAvg > $turbSafe[1]) {
+                $insights[] = "Water clarity was poor (avg " . round($turbAvg, 1) . " NTU). It is too cloudy. Reduce feeding and check your filter.";
+                $overallStatus = 'Warning'; $statusColor = '#F57C00';
+            } else {
+                $insights[] = "Water clarity was good, averaging " . round($turbAvg, 1) . " NTU.";
+            }
+
+            // Check for Critical Spikes
+            if (max($temps) > $tempSafe[1] + 2 || min($phs) < $phSafe[0] - 0.5) {
+                $overallStatus = 'Critical';
+                $statusColor = '#D32F2F'; // Red
+                array_unshift($insights, "WARNING: There were critical spikes during this period that may have caused extreme stress to your crayfish.");
+            }
+
+            // Add these variables to the array passed to the PDF view
             $pdf = Pdf::loadView('reports.pdf', [
                 'tankName' => $tank->Tankname,
                 'periodLabel' => $periodLabel,
@@ -1671,6 +1724,10 @@ class AuthController extends Controller
                 'chartTempUrl' => $chartTempUrl,
                 'chartPhUrl' => $chartPhUrl,
                 'chartTurbUrl' => $chartTurbUrl,
+                'insights' => $insights,
+                'overallStatus' => $overallStatus,
+                'statusColor' => $statusColor,
+                'mode' => $mode
             ])->setOption('isRemoteEnabled', true);
 
             $filename = "craysafe_report_tank{$tankId}.pdf";
