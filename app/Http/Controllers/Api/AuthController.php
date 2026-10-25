@@ -1514,9 +1514,7 @@ class AuthController extends Controller
     {
         try {
             $token = $request->bearerToken();
-            if (!$token) {
-                return $this->unauthorized();
-            }
+            if (!$token) return $this->unauthorized();
             $parts = explode('|', base64_decode($token));
             $userId = $parts[0] ?? null;
 
@@ -1527,9 +1525,7 @@ class AuthController extends Controller
                 ->select('tanks.TankID', 'tanks.Tankname')
                 ->first();
             
-            if (!$tank) {
-                return $this->notFound('Tank not found');
-            }
+            if (!$tank) return $this->notFound('Tank not found');
 
             $range = $request->query('range', '7d');
             $since = match ($range) {
@@ -1538,54 +1534,56 @@ class AuthController extends Controller
                 default => now()->subDays(7)->startOfDay(),
             };
 
+            // 1. Get exact stats for the summary (Min, Max, Avg, Total Count)
+            $stats = DB::table('sensor_data')
+                ->where('tank_id', $tankId)
+                ->where('timestamp', '>=', $since)
+                ->select(
+                    DB::raw('MIN(temperature) as min_temp, MAX(temperature) as max_temp, AVG(temperature) as avg_temp'),
+                    DB::raw('MIN(ph_level) as min_ph, MAX(ph_level) as max_ph, AVG(ph_level) as avg_ph'),
+                    DB::raw('MIN(turbidity) as min_turb, MAX(turbidity) as max_turb, AVG(turbidity) as avg_turb'),
+                    DB::raw('COUNT(*) as count')
+                )
+                ->first();
+
+            $summary = null;
+            if ($stats && $stats->count > 0) {
+                $summary = [
+                    'temperature' => ['min' => round($stats->min_temp, 2), 'avg' => round($stats->avg_temp, 2), 'max' => round($stats->max_temp, 2)],
+                    'ph' => ['min' => round($stats->min_ph, 2), 'avg' => round($stats->avg_ph, 2), 'max' => round($stats->max_ph, 2)],
+                    'turbidity' => ['min' => round($stats->min_turb, 2), 'avg' => round($stats->avg_turb, 2), 'max' => round($stats->max_turb, 2)],
+                    'reading_count' => $stats->count,
+                ];
+            }
+
+            // 2. Group by hour so the chart isn't overwhelmed with 100,000 points
             $readings = DB::table('sensor_data')
                 ->where('tank_id', $tankId)
                 ->where('timestamp', '>=', $since)
+                ->select(
+                    DB::raw("DATE_FORMAT(timestamp, '%Y-%m-%d %H:00:00') as timestamp"),
+                    DB::raw("AVG(temperature) as temperature"),
+                    DB::raw("AVG(ph_level) as ph"),
+                    DB::raw("AVG(turbidity) as turbidity")
+                )
+                ->groupBy('timestamp')
                 ->orderBy('timestamp')
-                ->limit(200)
                 ->get()
                 ->map(function ($row) {
                     return [
                         'timestamp' => $row->timestamp,
                         'temperature' => round((float) $row->temperature, 2),
-                        'ph' => round((float) $row->ph_level, 2),
+                        'ph' => round((float) $row->ph, 2),
                         'turbidity' => round((float) $row->turbidity, 2)
                     ];
                 });
-
-            $summary = null;
-            if ($readings->isNotEmpty()) {
-                $temps = $readings->pluck('temperature');
-                $phs = $readings->pluck('ph');
-                $turbs = $readings->pluck('turbidity');
-                $summary = [
-                    'temperature' => [
-                        'min' => round($temps->min(), 2),
-                        'avg' => round($temps->avg(), 2),
-                        'max' => round($temps->max(), 2),
-                    ],
-                    'ph' => [
-                        'min' => round($phs->min(), 2),
-                        'avg' => round($phs->avg(), 2),
-                        'max' => round($phs->max(), 2),
-                    ],
-                    'turbidity' => [
-                        'min' => round($turbs->min(), 2),
-                        'avg' => round($turbs->avg(), 2),
-                        'max' => round($turbs->max(), 2),
-                    ],
-                    'reading_count' => $readings->count(),
-                ];
-            };
 
             return $this->success([
                 'tank' => $tank,
                 'range' => $range,
                 'readings' => $readings,
                 'summary' => $summary,
-                ],
-                'Reports loaded'
-            );
+                ], 'Reports loaded');
         } catch (\Exception $e) {
             Log::error('GetTankReports', ['message' => $e->getMessage()]);
             return $this->serverError();
@@ -1613,40 +1611,57 @@ class AuthController extends Controller
                 return $this->notFound('Tank not found');
             }
 
-            $range = $request->query('range', '7d');
+                        $range = $request->query('range', '7d');
             $since = match ($range) {
-                '14d' => now()->subDays(14),
-                '30d' => now()->subDays(30),
-                default => now()->subDays(7),
+                '14d' => now()->subDays(14)->startOfDay(),
+                '30d' => now()->subDays(30)->startOfDay(),
+                default => now()->subDays(7)->startOfDay(),
             };
+
+            $stats = DB::table('sensor_data')
+                ->where('tank_id', $tankId)
+                ->where('timestamp', '>=', $since)
+                ->select(
+                    DB::raw('MIN(temperature) as min_temp, MAX(temperature) as max_temp, AVG(temperature) as avg_temp'),
+                    DB::raw('MIN(ph_level) as min_ph, MAX(ph_level) as max_ph, AVG(ph_level) as avg_ph'),
+                    DB::raw('MIN(turbidity) as min_turb, MAX(turbidity) as max_turb, AVG(turbidity) as avg_turb'),
+                    DB::raw('COUNT(*) as count')
+                )
+                ->first();
+
+            if (!$stats || $stats->count == 0) {
+                return $this->notFound('No data for this period');
+            }
 
             $readings = DB::table('sensor_data')
                 ->where('tank_id', $tankId)
                 ->where('timestamp', '>=', $since)
+                ->select(
+                    DB::raw("DATE_FORMAT(timestamp, '%Y-%m-%d %H:00:00') as timestamp"),
+                    DB::raw("AVG(temperature) as temperature"),
+                    DB::raw("AVG(ph_level) as ph"),
+                    DB::raw("AVG(turbidity) as turbidity")
+                )
+                ->groupBy('timestamp')
                 ->orderBy('timestamp')
-                ->limit(200)
                 ->get()
                 ->map(fn($row) => [
                     'timestamp' => $row->timestamp,
                     'temperature' => round((float) $row->temperature, 2),
-                    'ph' => round((float) $row->ph_level, 2),
+                    'ph' => round((float) $row->ph, 2),
                     'turbidity' => round((float) $row->turbidity, 2),
                 ])
                 ->values()
                 ->all();
-
-            if (empty($readings)) {
-                return $this->notFound('No data for this period');
-            }
 
             $temps = array_column($readings, 'temperature');
             $phs = array_column($readings, 'ph');
             $turbs = array_column($readings, 'turbidity');
 
             $summary = [
-                'temperature' => ['min' => min($temps), 'avg' => round(array_sum($temps) / count($temps), 2), 'max' => max($temps)],
-                'ph' => ['min' => min($phs), 'avg' => round(array_sum($phs) / count($phs), 2), 'max' => max($phs)],
-                'turbidity' => ['min' => min($turbs), 'avg' => round(array_sum($turbs) / count($turbs), 2), 'max' => max($turbs)],
+                'temperature' => ['min' => round($stats->min_temp, 2), 'avg' => round($stats->avg_temp, 2), 'max' => round($stats->max_temp, 2)],
+                'ph' => ['min' => round($stats->min_ph, 2), 'avg' => round($stats->avg_ph, 2), 'max' => round($stats->max_ph, 2)],
+                'turbidity' => ['min' => round($stats->min_turb, 2), 'avg' => round($stats->avg_turb, 2), 'max' => round($stats->max_turb, 2)],
             ];
 
             $labels = array_map(fn($r) => substr($r['timestamp'], 5, 11), $readings);
@@ -1673,8 +1688,8 @@ class AuthController extends Controller
             $overallStatus = 'Safe';
             $statusColor = '#2E7D32'; // Green
 
-            // 1. Temperature Check
-            $tempAvg = array_sum($temps) / count($temps);
+            // 1. Temperature Check (using raw stats for accuracy)
+            $tempAvg = $stats->avg_temp;
             if ($tempAvg > $tempSafe[1]) {
                 $insights[] = "Temperature was consistently TOO HIGH (avg " . round($tempAvg, 1) . "°C). This causes severe stress. Please add a fan or float ice.";
                 $overallStatus = 'Warning'; $statusColor = '#F57C00'; // Orange
@@ -1686,7 +1701,7 @@ class AuthController extends Controller
             }
 
             // 2. pH Check
-            $phAvg = array_sum($phs) / count($phs);
+            $phAvg = $stats->avg_ph;
             if ($phAvg > $phSafe[1]) {
                 $insights[] = "pH was too alkaline (avg " . round($phAvg, 2) . "). The water is too hard. Consider a partial water change or adding driftwood.";
                 $overallStatus = 'Warning'; $statusColor = '#F57C00';
@@ -1698,7 +1713,7 @@ class AuthController extends Controller
             }
 
             // 3. Turbidity Check
-            $turbAvg = array_sum($turbs) / count($turbs);
+            $turbAvg = $stats->avg_turb;
             if ($turbAvg > $turbSafe[1]) {
                 $insights[] = "Water clarity was poor (avg " . round($turbAvg, 1) . " NTU). It is too cloudy. Reduce feeding and check your filter.";
                 $overallStatus = 'Warning'; $statusColor = '#F57C00';
@@ -1706,8 +1721,8 @@ class AuthController extends Controller
                 $insights[] = "Water clarity was good, averaging " . round($turbAvg, 1) . " NTU.";
             }
 
-            // Check for Critical Spikes
-            if (max($temps) > $tempSafe[1] + 2 || min($phs) < $phSafe[0] - 0.5) {
+            // Check for Critical Spikes using raw MAX and MIN data
+            if ($stats->max_temp > $tempSafe[1] + 2 || $stats->min_ph < $phSafe[0] - 0.5) {
                 $overallStatus = 'Critical';
                 $statusColor = '#D32F2F'; // Red
                 array_unshift($insights, "WARNING: There were critical spikes during this period that may have caused extreme stress to your crayfish.");
@@ -1718,7 +1733,7 @@ class AuthController extends Controller
                 'tankName' => $tank->Tankname,
                 'periodLabel' => $periodLabel,
                 'generatedAt' => now()->format('M d, Y \a\t H:i'),
-                'readingCount' => count($readings),
+                'readingCount' => $stats->count, // 👈 Changed to use total raw readings count
                 'readings' => $readings,
                 'summary' => $summary,
                 'chartTempUrl' => $chartTempUrl,
