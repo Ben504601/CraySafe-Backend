@@ -1534,7 +1534,7 @@ class AuthController extends Controller
                 default => now()->subDays(7)->startOfDay(),
             };
 
-            // 1. Get exact stats for the summary (Min, Max, Avg, Total Count)
+            // 1. Get exact stats for the summary
             $stats = DB::table('sensor_data')
                 ->where('tank_id', $tankId)
                 ->where('timestamp', '>=', $since)
@@ -1556,27 +1556,28 @@ class AuthController extends Controller
                 ];
             }
 
-            // 2. Group by hour so the chart isn't overwhelmed with 100,000 points
+            // 2. Group by hour (using alias to prevent MySQL strict mode errors)
             $readings = DB::table('sensor_data')
                 ->where('tank_id', $tankId)
                 ->where('timestamp', '>=', $since)
                 ->select(
-                    DB::raw("DATE_FORMAT(timestamp, '%Y-%m-%d %H:00:00') as timestamp"),
+                    DB::raw("DATE_FORMAT(timestamp, '%Y-%m-%d %H:00:00') as formatted_time"),
                     DB::raw("AVG(temperature) as temperature"),
                     DB::raw("AVG(ph_level) as ph"),
                     DB::raw("AVG(turbidity) as turbidity")
                 )
-                ->groupBy('timestamp')
-                ->orderBy('timestamp')
+                ->groupBy(DB::raw("DATE_FORMAT(timestamp, '%Y-%m-%d %H:00:00')"))
+                ->orderBy('formatted_time')
                 ->get()
                 ->map(function ($row) {
                     return [
-                        'timestamp' => $row->timestamp,
+                        'timestamp' => $row->formatted_time,
                         'temperature' => round((float) $row->temperature, 2),
                         'ph' => round((float) $row->ph, 2),
                         'turbidity' => round((float) $row->turbidity, 2)
                     ];
-                });
+                })
+                ->values();
 
             return $this->success([
                 'tank' => $tank,
@@ -1594,9 +1595,7 @@ class AuthController extends Controller
     {
         try {
             $token = $request->bearerToken();
-            if (!$token) {
-                return $this->unauthorized();
-            }
+            if (!$token) return $this->unauthorized();
             $parts = explode('|', base64_decode($token));
             $userId = $parts[0] ?? null;
 
@@ -1607,9 +1606,7 @@ class AuthController extends Controller
                 ->select('tanks.TankID', 'tanks.Tankname')
                 ->first();
 
-            if (!$tank) {
-                return $this->notFound('Tank not found');
-            }
+            if (!$tank) return $this->notFound('Tank not found');
 
             $range = $request->query('range', '7d');
             $since = match ($range) {
@@ -1629,24 +1626,22 @@ class AuthController extends Controller
                 )
                 ->first();
 
-            if (!$stats || $stats->count == 0) {
-                return $this->notFound('No data for this period');
-            }
+            if (!$stats || $stats->count == 0) return $this->notFound('No data for this period');
 
             $readings = DB::table('sensor_data')
                 ->where('tank_id', $tankId)
                 ->where('timestamp', '>=', $since)
                 ->select(
-                    DB::raw("DATE_FORMAT(timestamp, '%Y-%m-%d %H:00:00') as timestamp"),
+                    DB::raw("DATE_FORMAT(timestamp, '%Y-%m-%d %H:00:00') as formatted_time"),
                     DB::raw("AVG(temperature) as temperature"),
                     DB::raw("AVG(ph_level) as ph"),
                     DB::raw("AVG(turbidity) as turbidity")
                 )
-                ->groupBy('timestamp')
-                ->orderBy('timestamp')
+                ->groupBy(DB::raw("DATE_FORMAT(timestamp, '%Y-%m-%d %H:00:00')"))
+                ->orderBy('formatted_time')
                 ->get()
                 ->map(fn($row) => [
-                    'timestamp' => $row->timestamp,
+                    'timestamp' => $row->formatted_time,
                     'temperature' => round((float) $row->temperature, 2),
                     'ph' => round((float) $row->ph, 2),
                     'turbidity' => round((float) $row->turbidity, 2),
@@ -1654,21 +1649,20 @@ class AuthController extends Controller
                 ->values()
                 ->all();
 
-            $temps = array_column($readings, 'temperature');
-            $phs = array_column($readings, 'ph');
-            $turbs = array_column($readings, 'turbidity');
+            $step = max(1, ceil(count($readings) / 30));
+            $pdfReadings = [];
+            for ($i = 0; $i < count($readings); $i += $step) {
+                $pdfReadings[] = $readings[$i];
+            }
 
-            $summary = [
-                'temperature' => ['min' => round($stats->min_temp, 2), 'avg' => round($stats->avg_temp, 2), 'max' => round($stats->max_temp, 2)],
-                'ph' => ['min' => round($stats->min_ph, 2), 'avg' => round($stats->avg_ph, 2), 'max' => round($stats->max_ph, 2)],
-                'turbidity' => ['min' => round($stats->min_turb, 2), 'avg' => round($stats->avg_turb, 2), 'max' => round($stats->max_turb, 2)],
-            ];
+            $labels = array_map(fn($r) => substr($r['timestamp'], 5, 11), $pdfReadings);
+            $pdfTemps = array_column($pdfReadings, 'temperature');
+            $pdfPhs = array_column($pdfReadings, 'ph');
+            $pdfTurbs = array_column($pdfReadings, 'turbidity');
 
-            $labels = array_map(fn($r) => substr($r['timestamp'], 5, 11), $readings);
-
-            $chartTempUrl = $this->quickChartUrl('Temperature (°C)', $labels, $temps, '#D32F2F');
-            $chartPhUrl = $this->quickChartUrl('pH Level',        $labels, $phs,   '#0066CC');
-            $chartTurbUrl = $this->quickChartUrl('Turbidity (NTU)', $labels, $turbs, '#F57C00');
+            $chartTempUrl = $this->quickChartUrl('Temperature (°C)', $labels, $pdfTemps, '#D32F2F');
+            $chartPhUrl = $this->quickChartUrl('pH Level',        $labels, $pdfPhs,   '#0066CC');
+            $chartTurbUrl = $this->quickChartUrl('Turbidity (NTU)', $labels, $pdfTurbs, '#F57C00');
 
             $periodLabel = match ($range) {
                 '14d' => 'Last 14 days',
@@ -1676,7 +1670,6 @@ class AuthController extends Controller
                 default => 'Last 7 days',
             };
 
-                        // ─── Generate Plain-English Summary ───
             $mode = DB::table('dashboard')->where('TankID', $tankId)->value('Mode') ?? 'Growing';
             $isBreeding = $mode === 'Breeding';
             
@@ -1686,13 +1679,12 @@ class AuthController extends Controller
 
             $insights = [];
             $overallStatus = 'Safe';
-            $statusColor = '#2E7D32'; // Green
+            $statusColor = '#2E7D32';
 
-            // 1. Temperature Check (using raw stats for accuracy)
             $tempAvg = $stats->avg_temp;
             if ($tempAvg > $tempSafe[1]) {
                 $insights[] = "Temperature was consistently TOO HIGH (avg " . round($tempAvg, 1) . "°C). This causes severe stress. Please add a fan or float ice.";
-                $overallStatus = 'Warning'; $statusColor = '#F57C00'; // Orange
+                $overallStatus = 'Warning'; $statusColor = '#F57C00';
             } elseif ($tempAvg < $tempSafe[0]) {
                 $insights[] = "Temperature was TOO LOW (avg " . round($tempAvg, 1) . "°C). Growth will slow down. Ensure a heater is running.";
                 $overallStatus = 'Warning'; $statusColor = '#F57C00';
@@ -1700,7 +1692,6 @@ class AuthController extends Controller
                 $insights[] = "Temperature was ideal, averaging " . round($tempAvg, 1) . "°C.";
             }
 
-            // 2. pH Check
             $phAvg = $stats->avg_ph;
             if ($phAvg > $phSafe[1]) {
                 $insights[] = "pH was too alkaline (avg " . round($phAvg, 2) . "). The water is too hard. Consider a partial water change or adding driftwood.";
@@ -1712,7 +1703,6 @@ class AuthController extends Controller
                 $insights[] = "pH levels were stable and safe, averaging " . round($phAvg, 2) . ".";
             }
 
-            // 3. Turbidity Check
             $turbAvg = $stats->avg_turb;
             if ($turbAvg > $turbSafe[1]) {
                 $insights[] = "Water clarity was poor (avg " . round($turbAvg, 1) . " NTU). It is too cloudy. Reduce feeding and check your filter.";
@@ -1721,20 +1711,24 @@ class AuthController extends Controller
                 $insights[] = "Water clarity was good, averaging " . round($turbAvg, 1) . " NTU.";
             }
 
-            // Check for Critical Spikes using raw MAX and MIN data
             if ($stats->max_temp > $tempSafe[1] + 2 || $stats->min_ph < $phSafe[0] - 0.5) {
                 $overallStatus = 'Critical';
-                $statusColor = '#D32F2F'; // Red
+                $statusColor = '#D32F2F';
                 array_unshift($insights, "WARNING: There were critical spikes during this period that may have caused extreme stress to your crayfish.");
             }
 
-            // Add these variables to the array passed to the PDF view
+            $summary = [
+                'temperature' => ['min' => round($stats->min_temp, 2), 'avg' => round($stats->avg_temp, 2), 'max' => round($stats->max_temp, 2)],
+                'ph' => ['min' => round($stats->min_ph, 2), 'avg' => round($stats->avg_ph, 2), 'max' => round($stats->max_ph, 2)],
+                'turbidity' => ['min' => round($stats->min_turb, 2), 'avg' => round($stats->avg_turb, 2), 'max' => round($stats->max_turb, 2)],
+            ];
+
             $pdf = Pdf::loadView('reports.pdf', [
                 'tankName' => $tank->Tankname,
                 'periodLabel' => $periodLabel,
                 'generatedAt' => now()->format('M d, Y \a\t H:i'),
-                'readingCount' => $stats->count, // 👈 Changed to use total raw readings count
-                'readings' => $readings,
+                'readingCount' => $stats->count,
+                'readings' => $pdfReadings,
                 'summary' => $summary,
                 'chartTempUrl' => $chartTempUrl,
                 'chartPhUrl' => $chartPhUrl,
@@ -1745,7 +1739,7 @@ class AuthController extends Controller
                 'mode' => $mode
             ])->setOption('isRemoteEnabled', true);
 
-            $filename = "craysafe_report_tank{$tankId}.pdf";
+            $filename = "craysafe_report_tank{$tankId}_{$range}.pdf";
             $pdfOutput = $pdf->output();
 
             return response($pdfOutput, 200, [
