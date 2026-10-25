@@ -1561,12 +1561,12 @@ class AuthController extends Controller
                 ->where('tank_id', $tankId)
                 ->where('timestamp', '>=', $since)
                 ->select(
-                    DB::raw("DATE_FORMAT(timestamp, '%Y-%m-%d %H:00:00') as formatted_time"),
+                    DB::raw("DATE_FORMAT(timestamp, '%Y-%m-%d %H:%i:00') as formatted_time"),
                     DB::raw("AVG(temperature) as temperature"),
                     DB::raw("AVG(ph_level) as ph"),
                     DB::raw("AVG(turbidity) as turbidity")
                 )
-                ->groupBy(DB::raw("DATE_FORMAT(timestamp, '%Y-%m-%d %H:00:00')"))
+                ->groupBy(DB::raw("DATE_FORMAT(timestamp, '%Y-%m-%d %H:%i:00')"))
                 ->orderBy('formatted_time')
                 ->get()
                 ->map(function ($row) {
