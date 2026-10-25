@@ -1611,7 +1611,7 @@ class AuthController extends Controller
                 return $this->notFound('Tank not found');
             }
 
-                        $range = $request->query('range', '7d');
+            $range = $request->query('range', '7d');
             $since = match ($range) {
                 '14d' => now()->subDays(14)->startOfDay(),
                 '30d' => now()->subDays(30)->startOfDay(),
