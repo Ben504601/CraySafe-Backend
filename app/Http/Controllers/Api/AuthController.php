@@ -215,6 +215,9 @@ class AuthController extends Controller
                 'Status' => $latest
                     ? $this->computeOverallStatus($latest, $mode, $ttd)
                     : 'Unknown',
+                'TemperatureStatus' => $latest ? $this->paramStatus($latest->temperature, 'temperature', $mode) : 'Unknown',
+                'PhStatus' => $latest ? $this->paramStatus($latest->ph_level, 'ph', $mode) : 'Unknown',
+                'TurbidityStatus' => $latest ? $this->paramStatus($latest->turbidity, 'turbidity', $mode) : 'Unknown',
             ];
         });
 
