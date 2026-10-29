@@ -862,6 +862,33 @@ class AuthController extends Controller
         }
     }
 
+    public function markAllAlertsRead(Request $request)
+    {
+        try {
+            $token = $request->bearerToken();
+            if (!$token) {
+                return $this->unauthorized();
+            }
+            $parts = explode('|', base64_decode($token));
+            $userId = $parts[0] ?? null;
+            if (!$userId) {
+                return $this->error('Invalid token', 'INVALID_TOKEN', 401);
+            }
+
+            // Update all unread alerts that belong to this user's tanks
+            DB::table('alerts')
+                ->join('dashboard', 'alerts.tank_id', '=', 'dashboard.TankID')
+                ->where('dashboard.UserID', $userId)
+                ->where('alerts.status', 'unread')
+                ->update(['alerts.status' => 'read']);
+
+            return $this->success(null, 'All alerts marked as read');
+        } catch (\Exception $e) {
+            Log::error('MarkAllAlertsRead error', ['message' => $e->getMessage()]);
+            return $this->serverError();
+        }
+    }
+
     public function postSensorData(Request $request)
     {
         try {

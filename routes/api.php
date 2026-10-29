@@ -38,6 +38,7 @@ Route::middleware('throttle:api-general')->group(function () {
     Route::get('/tank/{id}/reports/pdf',    [AuthController::class, 'downloadReportPdf']);
     Route::get('/alerts',                   [AuthController::class, 'getAlerts']);
     Route::get('/alerts/unread-count',      [AuthController::class, 'getUnreadAlertCount']);
+    Route::post('/alerts/read-all',         [AuthController::class, 'markAllAlertsRead']);
     Route::post('/alerts/{id}/read',        [AuthController::class, 'markAlertRead']);
     Route::get('/support/qa',               [AuthController::class, 'getDiagnosticQnA']);
     Route::post('/support/qa/{id}/feedback',[AuthController::class, 'postQaFeedback']);
