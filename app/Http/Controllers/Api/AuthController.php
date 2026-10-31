@@ -1662,12 +1662,12 @@ class AuthController extends Controller
                 ->where('tank_id', $tankId)
                 ->where('timestamp', '>=', $since)
                 ->select(
-                    DB::raw("DATE_FORMAT(timestamp, '%Y-%m-%d %H:00:00') as formatted_time"),
+                    DB::raw("DATE_FORMAT(timestamp, '%Y-%m-%d %H:%i:00') as formatted_time"),
                     DB::raw("AVG(temperature) as temperature"),
                     DB::raw("AVG(ph_level) as ph"),
                     DB::raw("AVG(turbidity) as turbidity")
                 )
-                ->groupBy(DB::raw("DATE_FORMAT(timestamp, '%Y-%m-%d %H:00:00')"))
+                ->groupBy(DB::raw("DATE_FORMAT(timestamp, '%Y-%m-%d %H:%i:00')"))
                 ->orderBy('formatted_time')
                 ->get()
                 ->map(fn($row) => [
@@ -1679,7 +1679,7 @@ class AuthController extends Controller
                 ->values()
                 ->all();
 
-            $step = max(1, ceil(count($readings) / 30));
+            $step = max(1, ceil(count($readings) / 500));
             $pdfReadings = [];
             for ($i = 0; $i < count($readings); $i += $step) {
                 $pdfReadings[] = $readings[$i];
@@ -1769,7 +1769,8 @@ class AuthController extends Controller
                 'mode' => $mode
             ])->setOption('isRemoteEnabled', true);
 
-            $filename = "craysafe_report_tank{$tankId}_{$range}.pdf";
+            $timestamp = now()->format('Y-m-d_H-i');
+            $filename = "craysafe_report_tank{$tankId}_{$range}_{$timestamp}.pdf";
             $pdfOutput = $pdf->output();
 
             return response($pdfOutput, 200, [
