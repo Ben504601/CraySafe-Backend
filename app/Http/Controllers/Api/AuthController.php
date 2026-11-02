@@ -1262,7 +1262,7 @@ class AuthController extends Controller
         $readings = DB::table('sensor_data')
             ->where('tank_id', $tankId)
             ->orderBy('timestamp', 'desc')
-            ->limit(21)
+            ->limit(100)
             ->get()
             ->reverse()
             ->values();
