@@ -283,7 +283,7 @@ class AuthController extends Controller
         $readings = DB::table('sensor_data')
             ->where('tank_id', $tankId)
             ->orderBy('timestamp', 'desc')
-            ->limit(21)
+            ->limit(100)
             ->get()
             ->reverse()
             ->values();
@@ -603,38 +603,40 @@ class AuthController extends Controller
         }
     }
 
-    /**
-     * Compute time (in minutes) until the value crosses a threshold.
-     * Returns null if no danger is predicted.
-     */
     private function computeTimeToDanger(array $values, array $timestamps, array $range)
     {
-        // 1. Fit the multiple linear regression model
+        // 1. NEW: If the latest reading is ALREADY critical, do not predict. Return null.
+        $lastValue = end($values);
+        if ($lastValue >= $range[1] || $lastValue <= $range[0]) {
+            return null;
+        }
+
+        // 2. Fit the multiple linear regression model
         $coefficients = $this->fitMLR($values, $timestamps);
         if ($coefficients === null) return null;
 
         [$b, $m1, $m2, $m3] = $coefficients;
 
-        // 2. Get the reference time (first reading)
+        // 3. Use HOURS instead of minutes to prevent matrix scaling errors
         $firstTimestamp = strtotime($timestamps[0]);
         $now = time();
-        $minutesSinceStart = ($now - $firstTimestamp) / 60;
+        $hoursSinceStart = ($now - $firstTimestamp) / 3600;
 
-        // 3. Iterate forward up to 30 days
-        $maxMinutes = 30 * 24 * 60;
-        for ($futureMinutes = 8; $futureMinutes <= $maxMinutes; $futureMinutes += 8) {
-            $totalMinutes = $minutesSinceStart + $futureMinutes;
-            $futureTimestamp = $now + ($futureMinutes * 60);
-            $futureHour = (int)date('G', $futureTimestamp);  // 0-23
+        // 4. Iterate forward up to 30 days (720 hours)
+        $maxHours = 30 * 24;
+        for ($futureHours = 0.1; $futureHours <= $maxHours; $futureHours += 0.1) {
+            $totalHours = $hoursSinceStart + $futureHours;
+            $futureTimestamp = $now + ($futureHours * 3600);
+            $futureHour = (int)date('G', $futureTimestamp); // 0-23
 
             $predicted = $b
-                + $m1 * $totalMinutes
+                + $m1 * $totalHours
                 + $m2 * sin(2 * M_PI * $futureHour / 24)
                 + $m3 * cos(2 * M_PI * $futureHour / 24);
 
             if ($predicted >= $range[1] || $predicted <= $range[0]) {
                 return [
-                    'minutes' => $futureMinutes,
+                    'minutes' => round($futureHours * 60), // Convert back to minutes for the app
                     'predicted_value' => round($predicted, 2),
                     'breach_type' => $predicted >= $range[1] ? 'high' : 'low',
                 ];
@@ -644,10 +646,6 @@ class AuthController extends Controller
         return null;
     }
 
-    /**
-     * Fit y = b + m1*t + m2*sin(2πh/24) + m3*cos(2πh/24)
-     * using ordinary least squares.
-     */
     private function fitMLR(array $values, array $timestamps)
     {
         $n = count($values);
@@ -655,17 +653,16 @@ class AuthController extends Controller
 
         $startTime = strtotime($timestamps[0]);
 
-        // Build the design matrix X (n × 4) and target vector y (n × 1)
         $X = [];
         $y = [];
         for ($i = 0; $i < $n; $i++) {
-            $t = (strtotime($timestamps[$i]) - $startTime) / 60;  // minutes
+            // 👇 CHANGED: Divide by 3600 to use HOURS instead of Minutes
+            $t = (strtotime($timestamps[$i]) - $startTime) / 3600; 
             $h = (int)date('G', strtotime($timestamps[$i]));
             $X[] = [1, $t, sin(2 * M_PI * $h / 24), cos(2 * M_PI * $h / 24)];
             $y[] = $values[$i];
         }
 
-        // Compute X^T · X (4×4 matrix) and X^T · y (4×1 vector)
         $XtX = array_fill(0, 4, array_fill(0, 4, 0.0));
         $Xty = array_fill(0, 4, 0.0);
 
@@ -678,7 +675,6 @@ class AuthController extends Controller
             }
         }
 
-        // Solve the 4×4 system using Gaussian elimination
         return $this->solveLinearSystem($XtX, $Xty);
     }
 
