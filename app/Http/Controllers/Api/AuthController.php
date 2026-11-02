@@ -229,7 +229,7 @@ class AuthController extends Controller
     {
         $tempSafe = $mode === "Breeding" ? [18, 26] : [20, 28];
         $phSafe = $mode === "Breeding" ? [6.8, 8.7] : [6.5, 8.5];
-        $turbSafe = $mode === "Breeding" ? [0, 70] : [0, 100];
+        $turbSafe = $mode === "Breeding" ? [0, 50] : [0, 30];
 
         $temp = $reading->temperature;
         $ph = $reading->ph_level;
@@ -259,7 +259,7 @@ class AuthController extends Controller
         [$min, $max] = match ($parameter) {
             'temperature' => $mode === 'Breeding' ? [18, 26] : [20, 28],
             'ph' => $mode === 'Breeding' ? [6.8, 8.7] : [6.5, 8.5],
-            'turbidity' => $mode === 'Breeding' ? [0, 70] : [0, 100],
+            'turbidity' => $mode === 'Breeding' ? [0, 50] : [0, 30],
             default => [0, 0],
         };
 
@@ -293,8 +293,8 @@ class AuthController extends Controller
         }
 
         $thresholds = $mode === 'Breeding'
-            ? ['temperature' => [18, 26], 'ph' => [6.8, 8.7], 'turbidity' => [0, 70]]
-            : ['temperature' => [20, 28], 'ph' => [6.5, 8.5], 'turbidity' => [0, 100]];
+            ? ['temperature' => [18, 26], 'ph' => [6.8, 8.7], 'turbidity' => [0, 50]]
+            : ['temperature' => [20, 28], 'ph' => [6.5, 8.5], 'turbidity' => [0, 30]];
 
         return [
             'temperature' => $this->computeTimeToDanger(
@@ -570,8 +570,8 @@ class AuthController extends Controller
 
             // 4. Define thresholds for each parameter based on mode
             $thresholds = $mode === 'Breeding' 
-                ? ['temperature' => [18, 26], 'ph' => [6.8, 8.7], 'turbidity' => [0, 70]]
-                : ['temperature' => [20, 28], 'ph' => [6.5, 8.5], 'turbidity' => [0, 100]];
+                ? ['temperature' => [18, 26], 'ph' => [6.8, 8.7], 'turbidity' => [0, 50]]
+                : ['temperature' => [20, 28], 'ph' => [6.5, 8.5], 'turbidity' => [0, 30]];
 
             // 5. Compute Time-to-Danger for each parameter
             $result = [
@@ -940,12 +940,12 @@ class AuthController extends Controller
             ? [
                 'temperature' => ['safe' => [18, 26], 'label' => 'Temperature', 'unit' => '°C'],
                 'ph'          => ['safe' => [6.8, 8.7], 'label' => 'pH', 'unit' => ''],
-                'turbidity'   => ['safe' => [0, 70], 'label' => 'Turbidity', 'unit' => 'NTU'],
+                'turbidity'   => ['safe' => [0, 50], 'label' => 'Turbidity', 'unit' => 'NTU'],
             ]
             : [
                 'temperature' => ['safe' => [20, 28], 'label' => 'Temperature', 'unit' => '°C'],
                 'ph'          => ['safe' => [6.5, 8.5], 'label' => 'pH', 'unit' => ''],
-                'turbidity'   => ['safe' => [0, 100], 'label' => 'Turbidity', 'unit' => 'NTU'],
+                'turbidity'   => ['safe' => [0, 30], 'label' => 'Turbidity', 'unit' => 'NTU'],
             ];
 
         $values = [
@@ -1701,7 +1701,7 @@ class AuthController extends Controller
             
             $tempSafe = $isBreeding ? [18, 26] : [20, 28];
             $phSafe = $isBreeding ? [6.8, 8.7] : [6.5, 8.5];
-            $turbSafe = $isBreeding ? [0, 70] : [0, 100];
+            $turbSafe = $isBreeding ? [0, 50] : [0, 30];
 
             $insights = [];
             $overallStatus = 'Safe';
