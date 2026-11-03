@@ -333,6 +333,7 @@ class AuthController extends Controller
                 ->select(
                     'tanks.TankID',
                     'tanks.Tankname',
+                    'tanks.ProductID',
                     'dashboard.Mode'
                 )
                 ->first();
@@ -352,6 +353,7 @@ class AuthController extends Controller
             return $this->success([
                 'TankID' => $tank->TankID,
                 'Tankname' => $tank->Tankname,
+                'ProductID' => $tank->ProductID,
                 'Mode' => $tank->Mode ?? 'Growing',
                 'Temperature' => $latest->temperature ?? null,
                 'Ph_Level' => $latest->ph_level ?? null,
