@@ -895,6 +895,7 @@ class AuthController extends Controller
                 'temperature' => 'required|numeric',
                 'ph_level' => 'required|numeric',
                 'turbidity' => 'required|numeric',
+                'age_seconds' => 'nullable|integer|min:0|max:86400',
             ]);
 
             $tank = DB::table('tanks')
@@ -905,12 +906,15 @@ class AuthController extends Controller
                 return $this->notFound('Product ID not paired to any tank');
             }
 
+            $ageSeconds = (int) $request->input('age_seconds', 0);
+            $readingTime = now()->subSeconds($ageSeconds);
+
             $dataId = DB::table('sensor_data')->insertGetId([
                 'tank_id' => $tank->TankID,
                 'temperature' => $request->temperature,
                 'ph_level' => $request->ph_level,
                 'turbidity' => $request->turbidity,
-                'timestamp' => now()
+                'timestamp' => $readingTime
             ]);
 
             $dashboard = DB::table('dashboard')
