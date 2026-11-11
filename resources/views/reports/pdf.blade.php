@@ -88,7 +88,7 @@
     <tbody>
         @foreach($readings as $r)
             <tr>
-                <td>{{ $r['timestamp'] }}</td>
+                <td>{{ \Carbon\Carbon::parse($r['timestamp'])->setTimezone('Asia/Manila')->format('M d, h:i A') }}</td>
                 <td>{{ $r['temperature'] }}</td>
                 <td>{{ $r['ph'] }}</td>
                 <td>{{ $r['turbidity'] }}</td>

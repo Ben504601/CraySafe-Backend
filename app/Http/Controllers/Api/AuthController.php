@@ -1694,7 +1694,7 @@ class AuthController extends Controller
                 $pdfReadings[] = $readings[$i];
             }
 
-            $labels = array_map(fn($r) => substr($r['timestamp'], 5, 11), $pdfReadings);
+            $labels = array_map(fn($r) => \Carbon\Carbon::parse($r['timestamp'])->format('h:i A'), $pdfReadings);
             $pdfTemps = array_column($pdfReadings, 'temperature');
             $pdfPhs = array_column($pdfReadings, 'ph');
             $pdfTurbs = array_column($pdfReadings, 'turbidity');
