@@ -1014,18 +1014,25 @@ class AuthController extends Controller
             // ─────────────────────────────────────────────
             // SCENARIO 3: TIME-TO-DANGER — prediction says breach is coming
             // ─────────────────────────────────────────────
-            $ttd = $this->computeTTDForParameter($tankId, $key, $config['safe']);
+                        $ttd = $this->computeTTDForParameter($tankId, $key, $config['safe']);
             if ($ttd !== null && $ttd['minutes'] <= 24 * 60) {
                 $direction = $ttd['breach_type']; // 'high' or 'low'
-                $hours = round($ttd['minutes'] / 60, 1);
+                $mins = max(1, $ttd['minutes']); // Ensure it's at least 1 minute
+                if ($mins < 60) {
+                    $timeString = "{$mins} minutes";
+                } else {
+                    $h = floor($mins / 60);
+                    $m = $mins % 60;
+                    $timeString = $m > 0 ? "{$h} hours and {$m} minutes" : "{$h} hours";
+                }
 
                 $fullAdvice  = $this->getAdvice($key, $direction, 'predict', false);
                 $shortAdvice = $this->getAdvice($key, $direction, 'predict', true);
 
                 $fullMessage = "🟡 PREDICTION: {$label} will reach {$ttd['predicted_value']}{$unit} " .
-                               "in approximately {$hours} hours.\n\n{$fullAdvice}";
+                               "in approximately {$timeString}.\n\n{$fullAdvice}";
 
-                $pushBody = "{$tankName}: {$label} predicted to breach in ~{$hours} hr. {$shortAdvice}";
+                $pushBody = "{$tankName}: {$label} predicted to breach in ~{$timeString}. {$shortAdvice}";
 
                 $this->createAlertIfUnique(
                     $tankId, $ownerId, 'Time-to-Danger', $label,
