@@ -647,11 +647,14 @@ class AuthController extends Controller
                 + $m2 * sin(2 * M_PI * $futureHour / 24)
                 + $m3 * cos(2 * M_PI * $futureHour / 24);
 
-            if ($predicted >= $range[1] || $predicted <= $range[0]) {
+            $isDangerousLow = $range[0] > 0 && $predicted <= $range[0];
+            $isDangerousHigh = $predicted >= $range[1];
+
+            if ($isDangerousHigh || $isDangerousLow) {
                 return [
                     'minutes' => round($futureHours * 60), // Convert back to minutes for the app
                     'predicted_value' => round($predicted, 2),
-                    'breach_type' => $predicted >= $range[1] ? 'high' : 'low',
+                    'breach_type' => $isDangerousHigh ? 'high' : 'low',
                 ];
             }
         }
