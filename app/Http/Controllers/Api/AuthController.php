@@ -1005,6 +1005,10 @@ class AuthController extends Controller
             $nearLow  = $value < ($min + $warningBuffer);
             $nearHigh = $value > ($max - $warningBuffer);
 
+            if ($key === 'turbidity') {
+                $nearLow = false;
+            }
+
             if ($nearLow || $nearHigh) {
                 $direction = $nearHigh ? 'high' : 'low';
 
@@ -1870,4 +1874,6 @@ class AuthController extends Controller
             return $this->serverError();
         }
     }
+
+
 }
