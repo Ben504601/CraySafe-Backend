@@ -256,10 +256,22 @@ class AuthController extends Controller
     {
         if ($value === null) return 'Unknown';
 
+        if ($parameter === 'turbidity') {
+            $max = $mode === 'Breeding' ? 50 : 30;
+            
+            // Critical if it's too cloudy
+            if ($value > $max) return 'Critical';
+            
+            // Warning if it's approaching the limit (e.g., > 21 NTU for Growing)
+            if ($value > ($max * 0.7)) return 'Warning';
+            
+            // 0 to 20 NTU is perfectly safe
+            return 'Safe'; 
+        }
+
         [$min, $max] = match ($parameter) {
             'temperature' => $mode === 'Breeding' ? [18, 26] : [20, 28],
             'ph' => $mode === 'Breeding' ? [6.8, 8.7] : [6.5, 8.5],
-            'turbidity' => $mode === 'Breeding' ? [0, 50] : [0, 30],
             default => [0, 0],
         };
 
@@ -268,7 +280,6 @@ class AuthController extends Controller
         $buffer = match ($parameter) {
             'temperature' => 1.0,
             'ph' => 0.3,
-            'turbidity' => $max * 0.3,
             default => 0,
         };
 
