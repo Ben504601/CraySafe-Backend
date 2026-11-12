@@ -6,6 +6,7 @@ use App\Http\Responses\ApiResponse;
 use App\Http\Controllers\Controller;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\DB;
@@ -1878,5 +1879,70 @@ class AuthController extends Controller
         }
     }
 
+    public function forgotPassword(Request $request)
+    {
+        $request->validate(['email' => 'required|email']);
 
+        $user = DB::table('users')->where('email', $request->email)->first();
+        if (!$user) {
+            return $this->error('If that email exists, a reset code has been sent.', 'EMAIL_SENT', 200); // Security: don't reveal if email exists
+        }
+
+        // Generate 6-digit OTP
+        $otp = rand(100000, 999999);
+
+        // Save to database (delete old ones for this email first)
+        DB::table('password_reset_tokens')->where('email', $request->email)->delete();
+        DB::table('password_reset_tokens')->insert([
+            'email' => $request->email,
+            'token' => Hash::make($otp), // Hash it for security
+            'created_at' => now()
+        ]);
+
+        // Send Email
+        try {
+            Mail::raw("Your CraySafe password reset code is: {$otp}\n\nThis code expires in 15 minutes.", function ($message) use ($request) {
+                $message->to($request->email)->subject('CraySafe Password Reset');
+            });
+            return $this->success(null, 'Reset code sent to your email.');
+        } catch (\Exception $e) {
+            Log::error('Mail error: ' . $e->getMessage());
+            return $this->serverError('Failed to send email. Check server logs.');
+        }
+    }
+
+    public function resetPassword(Request $request)
+    {
+        $request->validate([
+            'email' => 'required|email',
+            'otp' => 'required|string|size:6',
+            'password' => [
+                'required', 'string', 'min:8',
+                'regex:/[a-z]/', 'regex:/[A-Z]/', 'regex:/[0-9]/'
+            ],
+            'confirm_password' => 'required|same:password'
+        ]);
+
+        $resetRecord = DB::table('password_reset_tokens')->where('email', $request->email)->first();
+
+        if (!$resetRecord || !Hash::check($request->otp, $resetRecord->token)) {
+            return $this->error('Invalid or expired code', 'INVALID_OTP', 400);
+        }
+
+        // Check if token is older than 15 minutes
+        if (\Carbon\Carbon::parse($resetRecord->created_at)->addMinutes(15)->isPast()) {
+            DB::table('password_reset_tokens')->where('email', $request->email)->delete();
+            return $this->error('Code has expired. Please request a new one.', 'EXPIRED_OTP', 400);
+        }
+
+        // Update Password
+        DB::table('users')->where('email', $request->email)->update([
+            'password_hash' => Hash::make($request->password)
+        ]);
+
+        // Clean up
+        DB::table('password_reset_tokens')->where('email', $request->email)->delete();
+
+        return $this->success(null, 'Password reset successfully. You can now login.');
+    }
 }
