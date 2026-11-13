@@ -8,11 +8,17 @@ use Illuminate\Support\Facades\DB;
 //  PUBLIC (unauthenticated) — tight per-IP limits
 // ═══════════════════════════════════════════════════════════════
 
-Route::post('/login',    [AuthController::class, 'login'])
+Route::post('/login', [AuthController::class, 'login'])
     ->middleware('throttle:login');
 
 Route::post('/register', [AuthController::class, 'register'])
     ->middleware('throttle:register');
+
+Route::post('/forgot-password', [AuthController::class, 'forgotPassword'])
+    ->middleware('throttle:login');
+
+Route::post('/reset-password', [AuthController::class, 'resetPassword'])
+    ->middleware('throttle:login');
 
 // ═══════════════════════════════════════════════════════════════
 //  AUTHENTICATED — specific per-user limits
@@ -43,8 +49,6 @@ Route::middleware('throttle:api-general')->group(function () {
     Route::get('/support/qa',               [AuthController::class, 'getDiagnosticQnA']);
     Route::post('/support/qa/{id}/feedback',[AuthController::class, 'postQaFeedback']);
     Route::post('/pair-tank',               [AuthController::class, 'pairTank']);
-    Route::post('/forgot-password',         [AuthController::class, 'forgotPassword']);
-    Route::post('/reset-password',          [AuthController::class, 'resetPassword']);
 });
 
 // ═══════════════════════════════════════════════════════════════
