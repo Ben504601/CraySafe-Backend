@@ -230,7 +230,7 @@ class AuthController extends Controller
     {
         $tempSafe = $mode === "Breeding" ? [18, 26] : [20, 28];
         $phSafe = $mode === "Breeding" ? [6.8, 8.7] : [6.5, 8.5];
-        $turbSafe = $mode === "Breeding" ? [0, 50] : [0, 30];
+        $turbSafe = $mode === "Breeding" ? [0, 30] : [0, 50];
 
         $temp = $reading->temperature;
         $ph = $reading->ph_level;
@@ -258,7 +258,7 @@ class AuthController extends Controller
         if ($value === null) return 'Unknown';
 
         if ($parameter === 'turbidity') {
-            $max = $mode === 'Breeding' ? 50 : 30;
+            $max = $mode === 'Breeding' ? 30 : 50;
             
             // Critical if it's too cloudy
             if ($value > $max) return 'Critical';
@@ -292,6 +292,11 @@ class AuthController extends Controller
     // Compute TTD for all parameters
     public function computeAllTTD($tankId, $mode)
     {
+        $firstReading = DB::table('sensor_data')->where('tank_id', $tankId)->oldest('timestamp')->first();
+        if ($firstReading && \Carbon\Carbon::parse($firstReading->timestamp)->diffInDays(now()) < 7) {
+            return ['temperature' => null, 'ph' => null, 'turbidity' => null];
+        }
+
         $readings = DB::table('sensor_data')
             ->where('tank_id', $tankId)
             ->orderBy('timestamp', 'desc')
@@ -305,8 +310,8 @@ class AuthController extends Controller
         }
 
         $thresholds = $mode === 'Breeding'
-            ? ['temperature' => [18, 26], 'ph' => [6.8, 8.7], 'turbidity' => [0, 50]]
-            : ['temperature' => [20, 28], 'ph' => [6.5, 8.5], 'turbidity' => [0, 30]];
+            ? ['temperature' => [18, 26], 'ph' => [6.8, 8.7], 'turbidity' => [0, 30]]
+            : ['temperature' => [20, 28], 'ph' => [6.5, 8.5], 'turbidity' => [0, 50]];
 
         return [
             'temperature' => $this->computeTimeToDanger(
@@ -584,8 +589,8 @@ class AuthController extends Controller
 
             // 4. Define thresholds for each parameter based on mode
             $thresholds = $mode === 'Breeding' 
-                ? ['temperature' => [18, 26], 'ph' => [6.8, 8.7], 'turbidity' => [0, 50]]
-                : ['temperature' => [20, 28], 'ph' => [6.5, 8.5], 'turbidity' => [0, 30]];
+                ? ['temperature' => [18, 26], 'ph' => [6.8, 8.7], 'turbidity' => [0, 30]]
+                : ['temperature' => [20, 28], 'ph' => [6.5, 8.5], 'turbidity' => [0, 50]];
 
             // 5. Compute Time-to-Danger for each parameter
             $result = [
@@ -961,12 +966,12 @@ class AuthController extends Controller
             ? [
                 'temperature' => ['safe' => [18, 26], 'label' => 'Temperature', 'unit' => '°C'],
                 'ph'          => ['safe' => [6.8, 8.7], 'label' => 'pH', 'unit' => ''],
-                'turbidity'   => ['safe' => [0, 50], 'label' => 'Turbidity', 'unit' => 'NTU'],
+                'turbidity'   => ['safe' => [0, 30], 'label' => 'Turbidity', 'unit' => 'NTU'],
             ]
             : [
                 'temperature' => ['safe' => [20, 28], 'label' => 'Temperature', 'unit' => '°C'],
                 'ph'          => ['safe' => [6.5, 8.5], 'label' => 'pH', 'unit' => ''],
-                'turbidity'   => ['safe' => [0, 30], 'label' => 'Turbidity', 'unit' => 'NTU'],
+                'turbidity'   => ['safe' => [0, 50], 'label' => 'Turbidity', 'unit' => 'NTU'],
             ];
 
         $values = [
@@ -1034,7 +1039,7 @@ class AuthController extends Controller
             // SCENARIO 3: TIME-TO-DANGER — prediction says breach is coming
             // ─────────────────────────────────────────────
                         $ttd = $this->computeTTDForParameter($tankId, $key, $config['safe']);
-            if ($ttd !== null && $ttd['minutes'] <= 24 * 60) {
+            if ($ttd !== null && $ttd['minutes'] <= 8 * 60) {
                 $direction = $ttd['breach_type']; // 'high' or 'low'
                 $mins = max(1, $ttd['minutes']); // Ensure it's at least 1 minute
                 if ($mins < 60) {
@@ -1557,7 +1562,7 @@ class AuthController extends Controller
                 if ($ttdStatus !== 'Critical') {
                     $ttdStatus = 'Warning';
                 }
-            } elseif ($minutes < 24 * 60) {
+            } elseif ($minutes < 8 * 60) {
                 if ($ttdStatus === 'Safe') {
                     $ttdStatus = 'Warning';
                 }
@@ -1733,7 +1738,7 @@ class AuthController extends Controller
             
             $tempSafe = $isBreeding ? [18, 26] : [20, 28];
             $phSafe = $isBreeding ? [6.8, 8.7] : [6.5, 8.5];
-            $turbSafe = $isBreeding ? [0, 50] : [0, 30];
+            $turbSafe = $isBreeding ? [0, 30] : [0, 50];
 
             $insights = [];
             $overallStatus = 'Safe';
