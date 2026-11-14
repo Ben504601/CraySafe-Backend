@@ -563,11 +563,11 @@ class AuthController extends Controller
                 return $this->unauthorized();
             }
 
-            // 2. Fetch the last 21 sensor readings for this tank
+            // 2. Fetch the last 100 sensor readings for this tank
             $readings = DB::table('sensor_data')
                 ->where('tank_id', $tankId)
                 ->orderBy('timestamp', 'desc')
-                ->limit(21)
+                ->limit(100)
                 ->get()
                 ->reverse()
                 ->values();
