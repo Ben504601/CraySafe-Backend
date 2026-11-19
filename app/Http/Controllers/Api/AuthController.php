@@ -18,6 +18,35 @@ class AuthController extends Controller
 {
     use ApiResponse;
 
+    private function verifyAndGetUserId(Request $request)
+    {
+        $token = $request->bearerToken();
+        if (!$token) return null;
+
+        $decoded = base64_decode($token);
+        $parts = explode('|', $decoded);
+        
+        // Format: user_id|email|timestamp|signature
+        if (count($parts) < 4) return null;
+
+        $signature = array_pop($parts);
+        $payload = implode('|', $parts);
+
+        $expectedSignature = hash_hmac('sha256', $payload, config('app.key'));
+
+        // Use hash_equals to prevent timing attacks
+        if (!hash_equals($expectedSignature, $signature)) {
+            return null;
+        }
+
+        $timestamp = $parts[2] ?? null;
+        if (!$timestamp || \Carbon\Carbon::parse($timestamp)->addDays(30)->isPast()) {
+            return null;
+        }
+
+        return $parts[0];
+    }
+
     public function login(Request $request)
     {
         $request->validate([
@@ -43,8 +72,9 @@ class AuthController extends Controller
             );
         }
 
-        // Create a simple token (for testing)
-        $token = base64_encode($user->user_id . '|' . $user->email . '|' . now());
+        $payload = $user->user_id . '|' . $user->email . '|' . now();
+        $signature = hash_hmac('sha256', $payload, config('app.key'));
+        $token = base64_encode($payload . '|' . $signature);
 
         return $this->success([
             'token' => $token,
@@ -150,8 +180,9 @@ class AuthController extends Controller
             ->where('purchase_id', $productId)
             ->update(['is_activated' => 1]);
 
-        // Create token
-        $token = base64_encode($user->user_id . '|' . $user->email . '|' . now());
+        $payload = $user->user_id . '|' . $user->email . '|' . now();
+        $signature = hash_hmac('sha256', $payload, config('app.key'));
+        $token = base64_encode($payload . '|' . $signature);
 
         return $this->success([
             'token' => $token,
@@ -166,19 +197,9 @@ class AuthController extends Controller
     
     public function dashboard(Request $request)
     {
-        $token = $request->bearerToken();
-        if (!$token) {
-            return $this->unauthorized();
-        }
-
-        $parts = explode('|', base64_decode($token));
-        $userId = $parts[0] ?? null;
+        $userId = $this->verifyAndGetUserId($request);
         if (!$userId) {
-            return $this->error(
-                'Invalid token',
-                'INVALID_TOKEN',
-                401
-            );
+            return $this->unauthorized();
         }
 
         // Get all tanks for this user
@@ -335,12 +356,7 @@ class AuthController extends Controller
     public function tankDetail(Request $request, $tankId)
     {
         try {
-            $token = $request->bearerToken();
-            if (!$token) {
-                return $this->unauthorized();
-            }
-            $parts = explode('|', base64_decode($token));
-            $userId = $parts[0] ?? null;
+            $userId = $this->verifyAndGetUserId($request);
 
             // Tank info + mode (from dashboard)
             $tank = DB::table('tanks')
@@ -397,18 +413,9 @@ class AuthController extends Controller
     public function switchMode(Request $request, $tankId)
     {
         try {
-            $token = $request->bearerToken();
-            if (!$token) {
-                return $this->unauthorized();
-            }
-            $parts = explode('|', base64_decode($token));
-            $userId = $parts[0] ?? null;
+            $userId = $this->verifyAndGetUserId($request);
             if (!$userId) {
-                return $this->error(
-                    'Invalid token',
-                    'INVALID_TOKEN',
-                    401
-                );
+                return $this->unauthorized();
             }
 
             $request->validate([
@@ -474,21 +481,8 @@ class AuthController extends Controller
                 );
             }
 
-            // Get the authenticated user (from token)
-            $token = $request->bearerToken();
-            Log::info('Token received', ['token' => $token]);
-
-            if (!$token) {
-                return $this->unauthorized();
-            }
-
-            $parts = explode('|', base64_decode($token));
-            $userId = $parts[0] ?? null;
+            $userId = $this->verifyAndGetUserId($request);
             Log::info('User ID extracted', ['user_id' => $userId]);
-
-            if (!$userId) {
-                return $this->unauthorized();
-            }
 
             // Check if this ProductID is already linked to a tank
             $existingTank = DB::table('tanks')
@@ -557,10 +551,19 @@ class AuthController extends Controller
     public function timeToDanger(Request $request, $tankId)
     {
         try {
-            // 1. Verify token (same pattern)
-            $token = $request->bearerToken();
-            if (!$token) {
+            // 1. Verify token
+            $userId = $this->verifyAndGetUserId($request);
+            if (!$userId) {
                 return $this->unauthorized();
+            }
+
+            $tank = DB::table('dashboard')
+                ->where('TankID', $tankId)
+                ->where('UserID', $userId)
+                ->first();
+
+            if (!$tank) {
+                return $this->notFound('Tank not found');
             }
 
             // 2. Fetch the last 100 sensor readings for this tank
@@ -749,14 +752,9 @@ class AuthController extends Controller
         public function getAlerts(Request $request)
     {
         try {
-            $token = $request->bearerToken();
-            if (!$token) {
-                return $this->unauthorized();
-            }
-            $parts = explode('|', base64_decode($token));
-            $userId = $parts[0] ?? null;
+            $userId = $this->verifyAndGetUserId($request);
             if (!$userId) {
-                return $this->error('Invalid token', 'INVALID_TOKEN', 401);
+                return $this->unauthorized();
             }
 
             // 1. Pagination & Filter params
@@ -851,12 +849,7 @@ class AuthController extends Controller
     public function markAlertRead(Request $request, $alertId)
     {
         try {
-            $token = $request->bearerToken();
-            if (!$token) {
-                return $this->unauthorized();
-            }
-            $parts = explode('|', base64_decode($token));
-            $userId = $parts[0] ?? null;
+            $userId = $this->verifyAndGetUserId($request);
 
             $alert = DB::table('alerts')
                 ->join('dashboard', 'alerts.tank_id', '=', 'dashboard.TankID')
@@ -883,14 +876,9 @@ class AuthController extends Controller
     public function markAllAlertsRead(Request $request)
     {
         try {
-            $token = $request->bearerToken();
-            if (!$token) {
-                return $this->unauthorized();
-            }
-            $parts = explode('|', base64_decode($token));
-            $userId = $parts[0] ?? null;
+            $userId = $this->verifyAndGetUserId($request);
             if (!$userId) {
-                return $this->error('Invalid token', 'INVALID_TOKEN', 401);
+                return $this->unauthorized();
             }
 
             // Update all unread alerts that belong to this user's tanks
@@ -912,9 +900,9 @@ class AuthController extends Controller
         try {
             $request->validate([
                 'product_id' => 'required|string|exists:purchases,purchase_id',
-                'temperature' => 'required|numeric',
-                'ph_level' => 'required|numeric',
-                'turbidity' => 'required|numeric',
+                'temperature' => 'required|numeric|between:-10,60',
+                'ph_level' => 'required|numeric|between:0,14',
+                'turbidity' => 'required|numeric|between:0,1000',
                 'age_seconds' => 'nullable|integer|min:0|max:86400',
             ]);
 
@@ -1324,12 +1312,7 @@ class AuthController extends Controller
     {
         try {
             $request->validate(['fcm_token' => 'required|string']);
-            $token = $request->bearerToken();
-            if (!$token) {
-                return $this->unauthorized();
-            }
-            $parts = explode('|', base64_decode($token));
-            $userId = $parts[0] ?? null;
+            $userId = $this->verifyAndGetUserId($request);
 
             DB::table('user_fcm_tokens')->updateOrInsert(
                 ['fcm_token' => $request->fcm_token],
@@ -1423,12 +1406,7 @@ class AuthController extends Controller
     public function getDiagnosticQnA(Request $request)
     {
         try {
-            $token = $request->bearerToken();
-            if (!$token) {
-                return $this->unauthorized();
-            }
-            $parts = explode('|', base64_decode($token));
-            $userId = $parts[0] ?? null; // Extract user ID
+            $userId = $this->verifyAndGetUserId($request);
 
             $search = $request->query('search');
             $category = $request->query('category');
@@ -1441,9 +1419,10 @@ class AuthController extends Controller
                 ->selectRaw('(SELECT is_helpful FROM qa_feedback WHERE qa_id = qa_diagnostics.qa_id AND user_id = ?) as user_vote', [$userId]);
 
             if ($search) {
-                $query->where(function ($q) use ($search) {
-                    $q->where('issue_title', 'like', "%{$search}%")
-                        ->orWhere('solution', 'like', "%{$search}%");
+                $escapedSearch = addcslashes($search, '%_');
+                $query->where(function ($q) use ($escapedSearch) {
+                    $q->where('issue_title', 'like', "%{$escapedSearch}%")
+                        ->orWhere('solution', 'like', "%{$escapedSearch}%");
                 });
             }
 
@@ -1466,14 +1445,9 @@ class AuthController extends Controller
     public function postQaFeedback(Request $request, $qaId)
     {
         try {
-            $token = $request->bearerToken();
-            if (!$token) {
-                return $this->unauthorized();
-            }
-            $parts = explode('|', base64_decode($token));
-            $userId = $parts[0] ?? null;
+            $userId = $this->verifyAndGetUserId($request);
             if (!$userId) {
-                return $this->error('Invalid token', 'INVALID_TOKEN', 401);
+                return $this->unauthorized();
             }
 
             $isHelpful = filter_var($request->is_helpful, FILTER_VALIDATE_BOOLEAN) ? 1 : 0;
@@ -1510,18 +1484,9 @@ class AuthController extends Controller
     public function getUnreadAlertCount(Request $request)
     {
         try {
-            $token = $request->bearerToken();
-            if (!$token) {
-                return $this->unauthorized();
-            }
-            $parts = explode('|', base64_decode($token));
-            $userId = $parts[0] ?? null;
+            $userId = $this->verifyAndGetUserId($request);
             if (!$userId) {
-                return $this->error(
-                    'Invalid token',
-                    'INVALID_TOKEN',
-                    401
-                );
+                return $this->unauthorized();
             }
 
             $count = DB::table('alerts')
@@ -1576,10 +1541,7 @@ class AuthController extends Controller
     public function getTankReports(Request $request, $tankId)
     {
         try {
-            $token = $request->bearerToken();
-            if (!$token) return $this->unauthorized();
-            $parts = explode('|', base64_decode($token));
-            $userId = $parts[0] ?? null;
+            $userId = $this->verifyAndGetUserId($request);
 
             $tank = DB::table('tanks')
                 ->join('dashboard', 'tanks.TankID', '=', 'dashboard.TankID')
@@ -1659,10 +1621,7 @@ class AuthController extends Controller
     public function downloadReportPdf(Request $request, $tankId)
     {
         try {
-            $token = $request->bearerToken();
-            if (!$token) return $this->unauthorized();
-            $parts = explode('|', base64_decode($token));
-            $userId = $parts[0] ?? null;
+            $userId = $this->verifyAndGetUserId($request);
 
             $tank = DB::table('tanks')
                 ->join('dashboard', 'tanks.TankID', '=', 'dashboard.TankID')
@@ -1851,14 +1810,9 @@ class AuthController extends Controller
     public function renameTank(Request $request, $tankId)
     {
         try {
-            $token = $request->bearerToken();
-            if (!$token) {
-                return $this->unauthorized();
-            }
-            $parts = explode('|', base64_decode($token));
-            $userId = $parts[0] ?? null;
+            $userId = $this->verifyAndGetUserId($request);
             if (!$userId) {
-                return $this->error('Invalid token', 'INVALID_TOKEN', 401);
+                return $this->unauthorized();
             }
 
             $request->validate([
