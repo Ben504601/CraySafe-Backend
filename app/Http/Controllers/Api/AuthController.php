@@ -357,6 +357,9 @@ class AuthController extends Controller
     {
         try {
             $userId = $this->verifyAndGetUserId($request);
+            if (!$userId) {
+                return $this->unauthorized();
+            }
 
             // Tank info + mode (from dashboard)
             $tank = DB::table('tanks')
@@ -482,6 +485,9 @@ class AuthController extends Controller
             }
 
             $userId = $this->verifyAndGetUserId($request);
+            if (!$userId) {
+                return $this->unauthorized();
+            }
             Log::info('User ID extracted', ['user_id' => $userId]);
 
             // Check if this ProductID is already linked to a tank
@@ -850,6 +856,9 @@ class AuthController extends Controller
     {
         try {
             $userId = $this->verifyAndGetUserId($request);
+            if (!$userId) {
+                return $this->unauthorized();
+            }
 
             $alert = DB::table('alerts')
                 ->join('dashboard', 'alerts.tank_id', '=', 'dashboard.TankID')
@@ -1313,6 +1322,9 @@ class AuthController extends Controller
         try {
             $request->validate(['fcm_token' => 'required|string']);
             $userId = $this->verifyAndGetUserId($request);
+            if (!$userId) {
+                return $this->unauthorized();
+            }
 
             DB::table('user_fcm_tokens')->updateOrInsert(
                 ['fcm_token' => $request->fcm_token],
@@ -1542,6 +1554,9 @@ class AuthController extends Controller
     {
         try {
             $userId = $this->verifyAndGetUserId($request);
+            if (!$userId) {
+                return $this->unauthorized();
+            }
 
             $tank = DB::table('tanks')
                 ->join('dashboard', 'tanks.TankID', '=', 'dashboard.TankID')
@@ -1622,6 +1637,9 @@ class AuthController extends Controller
     {
         try {
             $userId = $this->verifyAndGetUserId($request);
+            if (!$userId) {
+                return $this->unauthorized();
+            }
 
             $tank = DB::table('tanks')
                 ->join('dashboard', 'tanks.TankID', '=', 'dashboard.TankID')
