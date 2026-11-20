@@ -1924,4 +1924,44 @@ class AuthController extends Controller
 
         return $this->success(null, 'Password reset successfully. You can now login.');
     }
+
+    public function removeTank(Request $request, $tankId)
+    {
+        try {
+            $userId = $this->verifyAndGetUserId($request);
+            if (!$userId) {
+                return $this->unauthorized();
+            }
+
+            // Verify ownership and get the ProductID
+            $tank = DB::table('tanks')
+                ->join('dashboard', 'tanks.TankID', '=', 'dashboard.TankID')
+                ->where('tanks.TankID', $tankId)
+                ->where('dashboard.UserID', $userId)
+                ->select('tanks.TankID', 'tanks.ProductID')
+                ->first();
+
+            if (!$tank) {
+                return $this->notFound('Tank not found');
+            }
+
+            // 1. Remove the tank from the user's dashboard
+            DB::table('dashboard')->where('TankID', $tankId)->delete();
+
+            // 2. Delete the tank (this cascades to delete all sensor_data and alerts for this tank)
+            DB::table('tanks')->where('TankID', $tankId)->delete();
+
+            // 3. Set the hardware Product ID back to unactivated (0) so it can be re-paired
+            if ($tank->ProductID) {
+                DB::table('purchases')
+                    ->where('purchase_id', $tank->ProductID)
+                    ->update(['is_activated' => 0]);
+            }
+
+            return $this->success(null, 'Tank removed and hardware unpaired successfully.');
+        } catch (\Exception $e) {
+            Log::error('RemoveTank error', ['message' => $e->getMessage()]);
+            return $this->serverError();
+        }
+    }
 }
