@@ -91,7 +91,7 @@ class AuthController extends Controller
     {
         // Validate input
         $request->validate([
-            'username' => 'required|string|max:50|unique:users,username',
+            'username' => 'required|string|max:50|unique:users,username|regex:/^[a-zA-Z0-9\s\-_]+$/',
             'email' => 'required|email|max:100|unique:users,email',
             'password' => [
                 'required',
@@ -134,6 +134,9 @@ class AuthController extends Controller
             );
         }
 
+        $username = strip_tags(trim($request->username));
+        $tankName = strip_tags(trim('Tank' . $productId));
+
         // Check if ProductID is already linked to a tank (redundance check)
         $existingTank = DB::table('tanks')
             ->where('ProductID', $productId)
@@ -149,7 +152,7 @@ class AuthController extends Controller
 
         // Insert new user
         $userId = DB::table('users')->insertGetId([
-            'username' => $request->username,
+            'username' => $username,
             'email' => $request->email,
             'password_hash' => Hash::make($request->password),
             'role' => 'user',
@@ -1834,7 +1837,7 @@ class AuthController extends Controller
             }
 
             $request->validate([
-                'name' => 'required|string|max:100'
+                'name' => 'required|string|max:100|regex:/^[a-zA-Z0-9\s\-_]+$/'
             ]);
 
             // Verify ownership via the dashboard table
@@ -1847,11 +1850,13 @@ class AuthController extends Controller
                 return $this->notFound('Tank not found');
             }
 
+            $cleanName = strip_tags(trim($request->name));
+
             DB::table('tanks')
                 ->where('TankID', $tankId)
-                ->update(['Tankname' => $request->name]);
+                ->update(['Tankname' => $cleanName]);
 
-            return $this->success(['Tankname' => $request->name], 'Tank renamed successfully');
+            return $this->success(['Tankname' => $cleanName], 'Tank renamed successfully');
         } catch (\Exception $e) {
             Log::error('RenameTank error', ['message' => $e->getMessage()]);
             return $this->serverError();
