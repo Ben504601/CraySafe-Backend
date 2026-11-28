@@ -223,10 +223,18 @@ class AuthController extends Controller
                 ->orderBy('timestamp', 'desc')
                 ->first();
 
+            $prediction = DB::table('tank_predictions')
+                ->where('tank_id', $tank->TankID)
+                ->first();
+
             $mode = $tank->Mode ?? 'Growing';
 
-            // Compute TTD for this tank so we can use it in the status
-            $ttd = $latest ? $this->computeAllTTD($tank->TankID, $mode) : null;
+            // Format the pre-calculated TTD to match what computeOverallStatus expects
+            $ttd = $prediction ? [
+                'temperature' => $prediction->temperature_ttd ? ['minutes' => $prediction->temperature_ttd] : null,
+                'ph' => $prediction->ph_ttd ? ['minutes' => $prediction->ph_ttd] : null,
+                'turbidity' => $prediction->turbidity_ttd ? ['minutes' => $prediction->turbidity_ttd] : null,
+            ] : null;
 
             return [
                 'DashboardID' => $tank->TankID,
@@ -313,49 +321,6 @@ class AuthController extends Controller
         return 'Safe';
     }
 
-    // Compute TTD for all parameters
-    public function computeAllTTD($tankId, $mode)
-    {
-        $firstReading = DB::table('sensor_data')->where('tank_id', $tankId)->oldest('timestamp')->first();
-        if ($firstReading && \Carbon\Carbon::parse($firstReading->timestamp)->diffInDays(now()) < 7) {
-            return ['temperature' => null, 'ph' => null, 'turbidity' => null];
-        }
-
-        $readings = DB::table('sensor_data')
-            ->where('tank_id', $tankId)
-            ->orderBy('timestamp', 'desc')
-            ->limit(100)
-            ->get()
-            ->reverse()
-            ->values();
-
-        if ($readings->count() < 21) {
-            return ['temperature' => null, 'ph' => null, 'turbidity' => null];
-        }
-
-        $thresholds = $mode === 'Breeding'
-            ? ['temperature' => [18, 26], 'ph' => [6.8, 8.7], 'turbidity' => [0, 30]]
-            : ['temperature' => [20, 28], 'ph' => [6.5, 8.5], 'turbidity' => [0, 50]];
-
-        return [
-            'temperature' => $this->computeTimeToDanger(
-                $readings->pluck('temperature')->toArray(),
-                $readings->pluck('timestamp')->toArray(),
-                $thresholds['temperature']
-            ),
-            'ph' => $this->computeTimeToDanger (
-                $readings->pluck('ph_level')->toArray(),
-                $readings->pluck('timestamp')->toArray(),
-                $thresholds['ph']
-            ),
-            'turbidity' => $this->computeTimeToDanger (
-                $readings->pluck('turbidity')->toArray(),
-                $readings->pluck('timestamp')->toArray(),
-                $thresholds['turbidity']
-            ),
-        ];
-    }
-
     public function tankDetail(Request $request, $tankId)
     {
         try {
@@ -387,7 +352,9 @@ class AuthController extends Controller
                 ->orderBy('timestamp', 'desc')
                 ->first();
 
-            $ttd = $this->computeAllTTD($tankId, $tank->Mode ?? 'Growing');
+            $prediction = DB::table('tank_predictions')
+                ->where('tank_id', $tankId)
+                ->first();
 
             return $this->success([
                 'TankID' => $tank->TankID,
@@ -398,12 +365,16 @@ class AuthController extends Controller
                 'Ph_Level' => $latest->ph_level ?? null,
                 'Turbidity' => $latest->turbidity ?? null,
                 'Status' => $latest
-                    ? $this->computeOverallStatus($latest, $tank->Mode ?? 'Growing', $ttd)
+                    ? $this->computeOverallStatus($latest, $tank->Mode ?? 'Growing', $prediction ? [
+                        'temperature' => $prediction->temperature_ttd ? ['minutes' => $prediction->temperature_ttd] : null,
+                        'ph' => $prediction->ph_ttd ? ['minutes' => $prediction->ph_ttd] : null,
+                        'turbidity' => $prediction->turbidity_ttd ? ['minutes' => $prediction->turbidity_ttd] : null,
+                    ] : null)
                     : 'Unknown',
                 'LastUpdated' => $latest->timestamp ?? null,
-                'TemperatureTTD' => $ttd['temperature'] ? $ttd['temperature']['minutes'] : null,
-                'PhTTD' => $ttd['ph'] ? $ttd['ph']['minutes'] : null,
-                'TurbidityTTD' => $ttd['turbidity'] ? $ttd['turbidity']['minutes'] : null,
+                'TemperatureTTD' => $prediction->temperature_ttd ?? null,
+                'PhTTD' => $prediction->ph_ttd ?? null,
+                'TurbidityTTD' => $prediction->turbidity_ttd ?? null,
                 'TemperatureStatus' => $latest ? $this->paramStatus($latest->temperature, 'temperature', $tank->Mode ?? 'Growing') : 'Unknown',
                 'PhStatus' => $latest ? $this->paramStatus($latest->ph_level, 'ph', $tank->Mode ?? 'Growing') : 'Unknown',
                 'TurbidityStatus' => $latest ? $this->paramStatus($latest->turbidity, 'turbidity', $tank->Mode ?? 'Growing') : 'Unknown',
@@ -557,208 +528,7 @@ class AuthController extends Controller
         }
     }
 
-    public function timeToDanger(Request $request, $tankId)
-    {
-        try {
-            // 1. Verify token
-            $userId = $this->verifyAndGetUserId($request);
-            if (!$userId) {
-                return $this->unauthorized();
-            }
-
-            $tank = DB::table('dashboard')
-                ->where('TankID', $tankId)
-                ->where('UserID', $userId)
-                ->first();
-
-            if (!$tank) {
-                return $this->notFound('Tank not found');
-            }
-
-            // 2. Fetch the last 100 sensor readings for this tank
-            $readings = DB::table('sensor_data')
-                ->where('tank_id', $tankId)
-                ->orderBy('timestamp', 'desc')
-                ->limit(100)
-                ->get()
-                ->reverse()
-                ->values();
-
-            if ($readings->count() < 21) {
-                return $this->error(
-                    'Not enough data. Need at least 21 readings.',
-                    'INSUFFICIENT_DATA',
-                    400
-                );
-            }
-
-            // 3. Get tank's current mode
-            $tank = DB::table('dashboard')
-                ->where('TankID', $tankId)
-                ->first();
-
-            $mode = $tank->Mode ?? 'Growing';
-
-            // 4. Define thresholds for each parameter based on mode
-            $thresholds = $mode === 'Breeding' 
-                ? ['temperature' => [18, 26], 'ph' => [6.8, 8.7], 'turbidity' => [0, 30]]
-                : ['temperature' => [20, 28], 'ph' => [6.5, 8.5], 'turbidity' => [0, 50]];
-
-            // 5. Compute Time-to-Danger for each parameter
-            $result = [
-                'temperature' => $this->computeTimeToDanger(
-                    $readings->pluck('temperature')->toArray(),
-                    $readings->pluck('timestamp')->toArray(),
-                    $thresholds['temperature']
-                ),
-                'ph' => $this->computeTimeToDanger(
-                    $readings->pluck('ph_level')->toArray(),
-                    $readings->pluck('timestamp')->toArray(),
-                    $thresholds['ph']
-                ),
-                'turbidity' => $this->computeTimeToDanger(
-                    $readings->pluck('turbidity')->toArray(),
-                    $readings->pluck('timestamp')->toArray(),
-                    $thresholds['turbidity']
-                ),
-            ];
-
-            return $this->success(
-                $result,
-                'Time-to-Danger computed'
-            );
-
-        } catch (\Exception $e) {
-            Log::error('TimeToDanger error', ['message' => $e->getMessage()]);
-            return $this->serverError($e->getMessage());
-        }
-    }
-
-    private function computeTimeToDanger(array $values, array $timestamps, array $range)
-    {
-        // 1. NEW: If the latest reading is ALREADY critical, do not predict. Return null.
-        $lastValue = end($values);
-        if ($lastValue >= $range[1] || $lastValue <= $range[0]) {
-            return null;
-        }
-
-        // 2. Fit the multiple linear regression model
-        $coefficients = $this->fitMLR($values, $timestamps);
-        if ($coefficients === null) return null;
-
-        [$b, $m1, $m2, $m3] = $coefficients;
-
-        // 3. Use HOURS instead of minutes to prevent matrix scaling errors
-        $firstTimestamp = strtotime($timestamps[0]);
-        $now = time();
-        $hoursSinceStart = ($now - $firstTimestamp) / 3600;
-
-        // 4. Iterate forward up to 30 days (720 hours)
-        $maxHours = 30 * 24;
-        for ($futureHours = 0.1; $futureHours <= $maxHours; $futureHours += 0.1) {
-            $totalHours = $hoursSinceStart + $futureHours;
-            $futureTimestamp = $now + ($futureHours * 3600);
-            $futureHour = (int)date('G', $futureTimestamp); // 0-23
-
-            $predicted = $b
-                + $m1 * $totalHours
-                + $m2 * sin(2 * M_PI * $futureHour / 24)
-                + $m3 * cos(2 * M_PI * $futureHour / 24);
-
-            $isDangerousLow = $range[0] > 0 && $predicted <= $range[0];
-            $isDangerousHigh = $predicted >= $range[1];
-
-            if ($isDangerousHigh || $isDangerousLow) {
-                return [
-                    'minutes' => round($futureHours * 60), // Convert back to minutes for the app
-                    'predicted_value' => round($predicted, 2),
-                    'breach_type' => $isDangerousHigh ? 'high' : 'low',
-                ];
-            }
-        }
-
-        return null;
-    }
-
-    private function fitMLR(array $values, array $timestamps)
-    {
-        $n = count($values);
-        if ($n < 4) return null;
-
-        $startTime = strtotime($timestamps[0]);
-
-        $X = [];
-        $y = [];
-        for ($i = 0; $i < $n; $i++) {
-            // 👇 CHANGED: Divide by 3600 to use HOURS instead of Minutes
-            $t = (strtotime($timestamps[$i]) - $startTime) / 3600; 
-            $h = (int)date('G', strtotime($timestamps[$i]));
-            $X[] = [1, $t, sin(2 * M_PI * $h / 24), cos(2 * M_PI * $h / 24)];
-            $y[] = $values[$i];
-        }
-
-        $XtX = array_fill(0, 4, array_fill(0, 4, 0.0));
-        $Xty = array_fill(0, 4, 0.0);
-
-        for ($i = 0; $i < $n; $i++) {
-            for ($j = 0; $j < 4; $j++) {
-                for ($k = 0; $k < 4; $k++) {
-                    $XtX[$j][$k] += $X[$i][$j] * $X[$i][$k];
-                }
-                $Xty[$j] += $X[$i][$j] * $y[$i];
-            }
-        }
-
-        return $this->solveLinearSystem($XtX, $Xty);
-    }
-
-    /**
-     * Solve Ax = b for x using Gaussian elimination with partial pivoting.
-     */
-    private function solveLinearSystem(array $A, array $b)
-    {
-        $n = count($b);
-
-        // Augmented matrix [A | b]
-        for ($i = 0; $i < $n; $i++) {
-            $A[$i][] = $b[$i];
-        }
-
-        // Forward elimination
-        for ($i = 0; $i < $n; $i++) {
-            // Find pivot
-            $maxRow = $i;
-            for ($k = $i + 1; $k < $n; $k++) {
-                if (abs($A[$k][$i]) > abs($A[$maxRow][$i])) $maxRow = $k;
-            }
-            if (abs($A[$maxRow][$i]) < 1e-10) return null;  // singular
-
-            // Swap rows
-            [$A[$i], $A[$maxRow]] = [$A[$maxRow], $A[$i]];
-
-            // Eliminate
-            for ($k = $i + 1; $k < $n; $k++) {
-                $factor = $A[$k][$i] / $A[$i][$i];
-                for ($j = $i; $j <= $n; $j++) {
-                    $A[$k][$j] -= $factor * $A[$i][$j];
-                }
-            }
-        }
-
-        // Back substitution
-        $x = array_fill(0, $n, 0.0);
-        for ($i = $n - 1; $i >= 0; $i--) {
-            $sum = $A[$i][$n];
-            for ($j = $i + 1; $j < $n; $j++) {
-                $sum -= $A[$i][$j] * $x[$j];
-            }
-            $x[$i] = $sum / $A[$i][$i];
-        }
-
-        return $x;
-    }
-
-        public function getAlerts(Request $request)
+    public function getAlerts(Request $request)
     {
         try {
             $userId = $this->verifyAndGetUserId($request);
@@ -1038,10 +808,26 @@ class AuthController extends Controller
             // ─────────────────────────────────────────────
             // SCENARIO 3: TIME-TO-DANGER — prediction says breach is coming
             // ─────────────────────────────────────────────
-                        $ttd = $this->computeTTDForParameter($tankId, $key, $config['safe']);
-            if ($ttd !== null && $ttd['minutes'] <= 8 * 60) {
-                $direction = $ttd['breach_type']; // 'high' or 'low'
-                $mins = max(1, $ttd['minutes']); // Ensure it's at least 1 minute
+            $prediction = DB::table('tank_predictions')->where('tank_id', $tankId)->first();
+            
+            $ttdMinutes = null;
+            $ttdPredicted = null;
+            $ttdBreachType = null;
+
+            if ($prediction) {
+                if ($key === 'temperature' && $prediction->temperature_ttd) {
+                    $ttdMinutes = $prediction->temperature_ttd;
+                } elseif ($key === 'ph' && $prediction->ph_ttd) {
+                    $ttdMinutes = $prediction->ph_ttd;
+                } elseif ($key === 'turbidity' && $prediction->turbidity_ttd) {
+                    $ttdMinutes = $prediction->turbidity_ttd;
+                }
+            }
+
+            if ($ttdMinutes !== null && $ttdMinutes <= 8 * 60) {
+                $direction = $value > $max ? 'high' : 'low'; // Determine direction based on current trend
+                $mins = max(1, $ttdMinutes);
+                
                 if ($mins < 60) {
                     $timeString = "{$mins} minutes";
                 } else {
@@ -1053,7 +839,7 @@ class AuthController extends Controller
                 $fullAdvice  = $this->getAdvice($key, $direction, 'predict', false);
                 $shortAdvice = $this->getAdvice($key, $direction, 'predict', true);
 
-                $fullMessage = "🟡 PREDICTION: {$label} will reach {$ttd['predicted_value']}{$unit} " .
+                $fullMessage = "🟡 PREDICTION: {$label} will breach the safe range " .
                                "in approximately {$timeString}.\n\n{$fullAdvice}";
 
                 $pushBody = "{$tankName}: {$label} predicted to breach in ~{$timeString}. {$shortAdvice}";
@@ -1292,32 +1078,6 @@ class AuthController extends Controller
             // ✅ Send the SHORT version as the push body, not the full one
             $this->sendPushToUser($ownerId, $title, $pushBody, $alertId, $priority);
         }
-    }
-
-    private function computeTTDForParameter($tankId, $parameterKey, $range)
-    {
-        $readings = DB::table('sensor_data')
-            ->where('tank_id', $tankId)
-            ->orderBy('timestamp', 'desc')
-            ->limit(100)
-            ->get()
-            ->reverse()
-            ->values();
-
-        if ($readings->count() < 21) return null;
-
-        // Map logical key to actual column
-        $column = match($parameterKey) {
-            'temperature' => 'temperature',
-            'ph'          => 'ph_level',
-            'turbidity'   => 'turbidity',
-        };
-
-        return $this->computeTimeToDanger(
-            $readings->pluck($column)->toArray(),
-            $readings->pluck('timestamp')->toArray(),
-            $range
-        );
     }
 
     public function saveFcmToken(Request $request)
